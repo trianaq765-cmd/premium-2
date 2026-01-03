@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: premium-loader
+    runtime: node
+    region: singapore
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SCRIPT_SOURCE_URL
+        sync: false
+      - key: ADMIN_KEY
+        generateValue: true
+      - key: WHITELIST_USER_IDS
+        sync: false
+      - key: OWNER_USER_IDS
+        sync: false
