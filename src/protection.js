@@ -1,6 +1,6 @@
 // ============================================================
-// 🛡️ PROTECTION MODULE v4.3.4 - SAFE METHOD (NO HOOKS)
-// Use DescendantAdded instead of hooking Instance.new
+// 🛡️ PROTECTION MODULE v4.3.5 - COMPLETE FIX
+// Fix: Clickable screen + Proper tool kick
 // ============================================================
 
 const crypto = require('crypto');
@@ -38,10 +38,9 @@ function generateProtectedScript(originalScript, options = {}) {
     const whitelistStr = whitelistUserIds.join(', ');
     const ownerStr = ownerUserIds.join(', ');
 
-    // Safe protection wrapper (no hooks, no readonly modification)
     const protectionWrapper = `
 -- ============================================================
--- OWNER PROTECTION v4.3.4 - SAFE METHOD
+-- OWNER PROTECTION v4.3.5 - FIXED
 -- ============================================================
 
 local _OWNER_IDS = {${ownerStr}}
@@ -49,8 +48,8 @@ local _PLAYERS = game:GetService("Players")
 local _LOCAL = _PLAYERS.LocalPlayer
 local _STAR_GUI = game:GetService("StarterGui")
 local _CORE_GUI = game:GetService("CoreGui")
+local _PLAYER_GUI = _LOCAL:WaitForChild("PlayerGui")
 local _ACTIVE = true
-local _GUIS_CREATED = {}
 local _CONNECTIONS = {}
 
 local function _IS_OWNER(uid)
@@ -60,40 +59,41 @@ local function _IS_OWNER(uid)
     return false
 end
 
-local function _DESTROY_ALL()
+local function _DESTROY_ALL_GUIS()
+    print("[PROTECTION] Destroying all GUIs...")
+    
+    local destroyed = 0
+    
+    -- Destroy ALL children in CoreGui (aggressive)
+    pcall(function()
+        for _, child in pairs(_CORE_GUI:GetChildren()) do
+            pcall(function() 
+                child:Destroy() 
+                destroyed = destroyed + 1
+            end)
+        end
+    end)
+    
+    -- Destroy ALL ScreenGuis in PlayerGui
+    pcall(function()
+        for _, child in pairs(_PLAYER_GUI:GetChildren()) do
+            if child:IsA("ScreenGui") or child:IsA("Frame") then
+                pcall(function() 
+                    child:Destroy() 
+                    destroyed = destroyed + 1
+                end)
+            end
+        end
+    end)
+    
+    print("[PROTECTION] Destroyed", destroyed, "GUIs")
+end
+
+local function _STOP_SCRIPT(msg)
     if not _ACTIVE then return end
     _ACTIVE = false
     
-    print("[PROTECTION] Destroying all GUIs...")
-    
-    -- Destroy tracked GUIs
-    for _, g in pairs(_GUIS_CREATED) do
-        pcall(function() 
-            if g and g.Parent then 
-                g:Destroy() 
-            end 
-        end)
-    end
-    
-    -- Destroy all ScreenGuis in CoreGui
-    pcall(function()
-        for _, child in pairs(_CORE_GUI:GetChildren()) do
-            if child:IsA("ScreenGui") then
-                pcall(function() child:Destroy() end)
-            end
-        end
-    end)
-    
-    -- Destroy all ScreenGuis in PlayerGui
-    pcall(function()
-        if _LOCAL.PlayerGui then
-            for _, child in pairs(_LOCAL.PlayerGui:GetChildren()) do
-                if child:IsA("ScreenGui") then
-                    pcall(function() child:Destroy() end)
-                end
-            end
-        end
-    end)
+    print("[PROTECTION] 🛑 STOPPING:", msg)
     
     -- Disconnect all connections
     for _, c in pairs(_CONNECTIONS) do
@@ -103,17 +103,14 @@ local function _DESTROY_ALL()
             end 
         end)
     end
-    
-    _GUIS_CREATED = {}
     _CONNECTIONS = {}
     
-    print("[PROTECTION] ✅ All GUIs destroyed")
-end
-
-local function _STOP_SCRIPT(msg)
-    print("[PROTECTION] Stopping:", msg)
+    -- Destroy all GUIs
+    _DESTROY_ALL_GUIS()
     
-    _DESTROY_ALL()
+    -- Wait a bit then clean again (in case of delayed GUI creation)
+    task.wait(0.5)
+    _DESTROY_ALL_GUIS()
     
     -- Notification
     pcall(function()
@@ -123,35 +120,11 @@ local function _STOP_SCRIPT(msg)
             Duration = 5
         })
     end)
-end
-
--- Track GUIs using DescendantAdded (SAFE - no hook needed)
-local function _TRACK_GUIS()
-    -- Track CoreGui descendants
-    local coreConn = _CORE_GUI.DescendantAdded:Connect(function(desc)
-        if desc:IsA("ScreenGui") or desc:IsA("Frame") or 
-           desc:IsA("TextLabel") or desc:IsA("TextButton") then
-            table.insert(_GUIS_CREATED, desc)
-        end
-    end)
-    table.insert(_CONNECTIONS, coreConn)
     
-    -- Track PlayerGui descendants
-    if _LOCAL.PlayerGui then
-        local playerConn = _LOCAL.PlayerGui.DescendantAdded:Connect(function(desc)
-            if desc:IsA("ScreenGui") or desc:IsA("Frame") or 
-               desc:IsA("TextLabel") or desc:IsA("TextButton") then
-                table.insert(_GUIS_CREATED, desc)
-            end
-        end)
-        table.insert(_CONNECTIONS, playerConn)
-    end
+    print("[PROTECTION] ✅ Script stopped successfully")
 end
 
--- Start tracking
-_TRACK_GUIS()
-
--- Background owner monitor
+-- Background owner monitor (check every 3 seconds)
 task.spawn(function()
     while _ACTIVE do
         task.wait(3)
@@ -168,29 +141,28 @@ task.spawn(function()
 end)
 
 -- Monitor for owner joining
-local playerConn = _PLAYERS.PlayerAdded:Connect(function(p)
+local conn = _PLAYERS.PlayerAdded:Connect(function(p)
     task.wait(0.5)
     if _IS_OWNER(p.UserId) then
         _STOP_SCRIPT("Owner (" .. p.Name .. ") joined the server")
     end
 end)
-table.insert(_CONNECTIONS, playerConn)
+table.insert(_CONNECTIONS, conn)
 
 print("[PROTECTION] 🛡️ Active - Monitoring for owner")
 
--- Store in global for manual control
+-- Global access
 _G._OWNER_PROTECTION = {
     active = function() return _ACTIVE end,
-    stop = _STOP_SCRIPT,
-    destroy = _DESTROY_ALL
+    stop = _STOP_SCRIPT
 }
 
 -- ============================================================
--- USER SCRIPT STARTS BELOW
+-- USER SCRIPT BELOW
 -- ============================================================
 `;
 
-    const protectedScript = `-- Protected v4.3.4 - Safe Method
+    const protectedScript = `-- Protected v4.3.5
 local ${v.main} = (function()
     local Players = game:GetService("Players")
     local HttpService = game:GetService("HttpService")
@@ -218,13 +190,13 @@ local ${v.main} = (function()
     
     local function checkOwnerPresence()
         if isOwner(LocalPlayer.UserId) then
-            print("[SCRIPT] You are the owner - Full access")
+            print("[SCRIPT] You are the owner")
             return false
         end
         
         for _, player in pairs(Players:GetPlayers()) do
             if isOwner(player.UserId) and player ~= LocalPlayer then
-                print("[SCRIPT] ⛔ Owner detected in server:", player.Name)
+                print("[SCRIPT] ⛔ Owner in server:", player.Name)
                 StarterGui:SetCore("SendNotification", {
                     Title = "⚠️ Cannot Load",
                     Text = "Owner is in this server",
@@ -262,6 +234,9 @@ local ${v.main} = (function()
     end
     
     local function ${v.kick}(reason, tools)
+        print("[SCRIPT] 🔨 KICKING:", reason)
+        
+        -- Send ban to server
         pcall(function()
             if BAN_ENDPOINT and BAN_ENDPOINT ~= "" then
                 ${v.http}(BAN_ENDPOINT, {
@@ -274,36 +249,172 @@ local ${v.main} = (function()
             end
         end)
         
-        task.wait(0.3)
-        LocalPlayer:Kick("⛔ BANNED\\n\\n" .. reason)
+        -- Show notification
+        pcall(function()
+            StarterGui:SetCore("SendNotification", {
+                Title = "⛔ BANNED",
+                Text = reason,
+                Duration = 3
+            })
+        end)
+        
+        -- Wait then kick
+        task.wait(0.5)
+        
+        -- Multiple kick methods
+        pcall(function()
+            LocalPlayer:Kick("⛔ BANNED\\n\\n" .. reason .. "\\n\\nYou have been permanently banned.")
+        end)
+        
+        pcall(function()
+            game:Shutdown()
+        end)
     end
     
+    -- Comprehensive tool list
     local ${v.tools} = {
-        "Dex", "DEX", "DarkDex", "InfiniteYield", "IY",
-        "Hydroxide", "SimpleSpy", "RemoteSpy", "BTool", "F3X"
+        -- Dex variants
+        "Dex", "DEX", "dex",
+        "DexV2", "DexV3", "DexV4",
+        "DexExplorer", "Dex_Explorer",
+        "DarkDex", "DarkDexV3", "Dark_Dex",
+        
+        -- Infinite Yield
+        "InfiniteYield", "Infinite_Yield", 
+        "IY_LOADED", "IY", "infiniteyield",
+        
+        -- Hydroxide
+        "Hydroxide", "HydroxideUI", 
+        "HYDROXIDE_LOADED", "hydroxide",
+        
+        -- Spies
+        "SimpleSpy", "SimpleSpyExecuted", 
+        "SimpleSpy_Loaded", "simplespy",
+        "RemoteSpy", "Remote_Spy", 
+        "REMOTESPY_LOADED", "remotespy",
+        
+        -- Other tools
+        "BTool", "BTool_Loaded", "BTools",
+        "F3X", "F3X_Loaded", "F3XTOOLS",
+        "UnnamedESP", "ESP_LOADED", "ESP"
     }
     
     local function ${v.detect}()
         local found = {}
         
-        for _, name in ipairs(${v.tools}) do
-            if rawget(_G, name) then table.insert(found, name) end
+        -- Check _G thoroughly
+        for key, value in pairs(_G) do
+            local keyLower = tostring(key):lower()
+            
+            -- Check against tool list
+            for _, toolName in ipairs(${v.tools}) do
+                if keyLower == toolName:lower() then
+                    if type(value) == "table" or type(value) == "boolean" then
+                        if not table.find(found, toolName) then
+                            table.insert(found, toolName)
+                            print("[DETECTION] Found in _G:", toolName)
+                        end
+                    end
+                end
+            end
+            
+            -- Pattern matching for common tools
+            if keyLower:match("dex") or keyLower:match("infinite") or 
+               keyLower:match("hydroxide") or keyLower:match("spy") or
+               keyLower:match("btool") or keyLower:match("f3x") then
+                if type(value) == "table" or type(value) == "boolean" then
+                    if not table.find(found, key) then
+                        table.insert(found, tostring(key))
+                        print("[DETECTION] Pattern match in _G:", key)
+                    end
+                end
+            end
         end
         
+        -- Check getgenv
         pcall(function()
             if getgenv then
-                for _, name in ipairs(${v.tools}) do
-                    if rawget(getgenv(), name) and not table.find(found, name) then
-                        table.insert(found, name)
+                local genv = getgenv()
+                for key, value in pairs(genv) do
+                    local keyLower = tostring(key):lower()
+                    
+                    for _, toolName in ipairs(${v.tools}) do
+                        if keyLower == toolName:lower() then
+                            if type(value) == "table" or type(value) == "boolean" then
+                                if not table.find(found, toolName) then
+                                    table.insert(found, toolName)
+                                    print("[DETECTION] Found in getgenv:", toolName)
+                                end
+                            end
+                        end
+                    end
+                    
+                    if keyLower:match("dex") or keyLower:match("infinite") or 
+                       keyLower:match("hydroxide") or keyLower:match("spy") then
+                        if not table.find(found, key) then
+                            table.insert(found, tostring(key))
+                            print("[DETECTION] Pattern match in getgenv:", key)
+                        end
                     end
                 end
             end
         end)
         
+        -- Check CoreGui for tool UIs
         pcall(function()
-            for _, name in ipairs(${v.tools}) do
-                if CoreGui:FindFirstChild(name) then
-                    table.insert(found, name .. "_UI")
+            for _, child in pairs(CoreGui:GetChildren()) do
+                if child:IsA("ScreenGui") then
+                    local name = child.Name
+                    local nameLower = name:lower()
+                    
+                    -- Check against known tool UI names
+                    if nameLower:match("dex") or nameLower:match("infinite") or
+                       nameLower:match("yield") or nameLower:match("hydroxide") or
+                       nameLower:match("spy") or nameLower:match("btool") or
+                       nameLower:match("f3x") then
+                        if not table.find(found, name .. "_UI") then
+                            table.insert(found, name .. "_UI")
+                            print("[DETECTION] Found UI in CoreGui:", name)
+                        end
+                    end
+                end
+            end
+        end)
+        
+        -- Check PlayerGui
+        pcall(function()
+            if LocalPlayer.PlayerGui then
+                for _, child in pairs(LocalPlayer.PlayerGui:GetChildren()) do
+                    if child:IsA("ScreenGui") then
+                        local name = child.Name
+                        local nameLower = name:lower()
+                        
+                        if nameLower:match("dex") or nameLower:match("infinite") or
+                           nameLower:match("hydroxide") or nameLower:match("spy") then
+                            if not table.find(found, name .. "_GUI") then
+                                table.insert(found, name .. "_GUI")
+                                print("[DETECTION] Found UI in PlayerGui:", name)
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+        
+        -- Check shared table
+        pcall(function()
+            if shared then
+                if shared.IYPrefix or shared.InfiniteYield or shared.IY then
+                    if not table.find(found, "IY_Shared") then
+                        table.insert(found, "IY_Shared")
+                        print("[DETECTION] Found IY in shared")
+                    end
+                end
+                if shared.Hydroxide then
+                    if not table.find(found, "Hydroxide_Shared") then
+                        table.insert(found, "Hydroxide_Shared")
+                        print("[DETECTION] Found Hydroxide in shared")
+                    end
                 end
             end
         end)
@@ -342,36 +453,46 @@ local ${v.main} = (function()
     end
     
     local function ${v.run}()
-        -- Check if owner already in server
+        print("[SCRIPT] 🔍 Starting security checks...")
+        
+        -- Check owner presence first
         if checkOwnerPresence() then
             print("[SCRIPT] Aborting - Owner present")
             return false
         end
         
-        -- Whitelist or tool detection
+        -- Tool detection or whitelist
         if isWhitelisted() then
-            print("[SCRIPT] ✅ Whitelisted user")
+            print("[SCRIPT] ✅ Whitelisted - Bypassing tool detection")
         else
+            print("[SCRIPT] 🔍 Checking for malicious tools...")
             local tools = ${v.detect}()
+            
             if #tools > 0 then
-                ${v.kick}("Tools detected: " .. table.concat(tools, ", "), tools)
+                local toolList = table.concat(tools, ", ")
+                print("[SCRIPT] ❌ TOOLS DETECTED:", toolList)
+                ${v.kick}("Malicious tools detected: " .. toolList, tools)
                 return false
             end
             
-            -- Background monitoring
+            print("[SCRIPT] ✅ No tools detected")
+            
+            -- Runtime monitoring (aggressive - every 5 seconds)
             task.spawn(function()
-                while task.wait(10) do
+                while task.wait(5) do
                     local t = ${v.detect}()
                     if #t > 0 then
-                        ${v.kick}("Runtime: " .. table.concat(t, ", "), t)
+                        local list = table.concat(t, ", ")
+                        print("[SCRIPT] ❌ RUNTIME DETECTION:", list)
+                        ${v.kick}("Runtime tool detection: " .. list, t)
                         break
                     end
                 end
             end)
         end
         
-        -- Decode script
-        print("[SCRIPT] 📦 Decoding...")
+        -- Decode and execute
+        print("[SCRIPT] 📦 Decoding script...")
         local content = ${v.decode}()
         
         if not content or #content < 10 then
@@ -379,10 +500,9 @@ local ${v.main} = (function()
             return false
         end
         
-        -- Prepend protection
         local finalScript = [[${protectionWrapper.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}]] .. content
         
-        print("[SCRIPT] 🚀 Executing with protection...")
+        print("[SCRIPT] 🚀 Executing with owner protection...")
         local fn, err = loadstring(finalScript)
         if not fn then
             warn("[SCRIPT] Compile error:", err)
@@ -393,7 +513,7 @@ local ${v.main} = (function()
         if not ok then
             warn("[SCRIPT] Runtime error:", msg)
         else
-            print("[SCRIPT] ✅ Loaded successfully")
+            print("[SCRIPT] ✅ Script loaded successfully!")
         end
         
         return ok
