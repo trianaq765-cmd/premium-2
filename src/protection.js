@@ -1,6 +1,6 @@
 // ============================================================
-// 🛡️ PROTECTION MODULE v4.3.1 - AGGRESSIVE OWNER DETECTION
-// Instant check + Force stop when owner detected
+// 🛡️ PROTECTION MODULE v4.3.2 - RUNTIME INJECTION
+// Inject owner detection directly into user script
 // ============================================================
 
 const crypto = require('crypto');
@@ -27,7 +27,8 @@ function generateProtectedScript(originalScript, options = {}) {
         hwid: randomVar('_HW'),
         run: randomVar('_R'),
         owner: randomVar('_OW'),
-        kill: randomVar('_KL'),
+        guard: randomVar('_GD'),
+        stop: randomVar('_ST'),
         active: randomVar('_AC')
     };
 
@@ -41,10 +42,145 @@ function generateProtectedScript(originalScript, options = {}) {
     const whitelistStr = whitelistUserIds.join(', ');
     const ownerStr = ownerUserIds.join(', ');
 
-    const protectedScript = `-- Protected v4.3.1 - Aggressive Owner Detection
-local ${v.active} = true
-local STOPPED = false
+    // Inject protection wrapper into user script
+    const injectedScript = `
+-- ============================================================
+-- INJECTED OWNER PROTECTION - DO NOT REMOVE
+-- ============================================================
 
+local _SCRIPT_ACTIVE = true
+local _OWNER_IDS = {${ownerStr}}
+local _PLAYERS = game:GetService("Players")
+local _LOCAL_PLAYER = _PLAYERS.LocalPlayer
+local _STAR_GUI = game:GetService("StarterGui")
+local _ALL_GUIS = {}
+local _ALL_CONNECTIONS = {}
+
+local function _IS_OWNER(userId)
+    for _, id in ipairs(_OWNER_IDS) do
+        if userId == id then return true end
+    end
+    return false
+end
+
+local function _STOP_SCRIPT(reason)
+    if not _SCRIPT_ACTIVE then return end
+    _SCRIPT_ACTIVE = false
+    
+    print("[PROTECTION] 🛑 Stopping script:", reason)
+    
+    -- Destroy all tracked GUIs
+    for _, gui in pairs(_ALL_GUIS) do
+        pcall(function()
+            if gui and gui.Parent then
+                gui:Destroy()
+            end
+        end)
+    end
+    
+    -- Disconnect all connections
+    for _, conn in pairs(_ALL_CONNECTIONS) do
+        pcall(function()
+            if conn and conn.Connected then
+                conn:Disconnect()
+            end
+        end)
+    end
+    
+    -- Clear tables
+    _ALL_GUIS = {}
+    _ALL_CONNECTIONS = {}
+    
+    -- Notification
+    pcall(function()
+        _STAR_GUI:SetCore("SendNotification", {
+            Title = "⚠️ Script Disabled",
+            Text = reason,
+            Duration = 5
+        })
+    end)
+    
+    -- Poison all major services to prevent further execution
+    local function poison()
+        error("[PROTECTION] Script has been stopped", 0)
+    end
+    
+    -- Override critical functions
+    task.wait = poison
+    task.spawn = poison
+    RunService = setmetatable({}, {__index = poison, __newindex = poison})
+    
+    print("[PROTECTION] ✅ Script stopped successfully")
+end
+
+-- Hook Instance.new to track GUIs
+local _ORIGINAL_INSTANCE_NEW = Instance.new
+Instance.new = function(className, parent)
+    local obj = _ORIGINAL_INSTANCE_NEW(className, parent)
+    
+    if className:match("Gui") or className:match("Frame") or 
+       className:match("Button") or className:match("Label") or
+       className:match("Box") then
+        table.insert(_ALL_GUIS, obj)
+    end
+    
+    return obj
+end
+
+-- Monitor for owner in background (aggressive)
+task.spawn(function()
+    local checkInterval = 3 -- Check every 3 seconds
+    
+    while _SCRIPT_ACTIVE do
+        task.wait(checkInterval)
+        
+        if not _SCRIPT_ACTIVE then break end
+        
+        -- Check all players in server
+        for _, player in pairs(_PLAYERS:GetPlayers()) do
+            if _IS_OWNER(player.UserId) and player ~= _LOCAL_PLAYER then
+                print("[PROTECTION] 🚨 Owner detected:", player.Name)
+                _STOP_SCRIPT("Owner (" .. player.Name .. ") is in the server")
+                return
+            end
+        end
+    end
+end)
+
+-- Monitor for new players joining
+local _player_added_conn = _PLAYERS.PlayerAdded:Connect(function(player)
+    if _IS_OWNER(player.UserId) then
+        print("[PROTECTION] 🚨 Owner joined:", player.Name)
+        task.wait(0.5)
+        _STOP_SCRIPT("Owner (" .. player.Name .. ") joined the server")
+    end
+end)
+table.insert(_ALL_CONNECTIONS, _player_added_conn)
+
+-- Store in global for external access
+_G._SCRIPT_GUARD = {
+    active = function() return _SCRIPT_ACTIVE end,
+    stop = _STOP_SCRIPT,
+    isOwner = _IS_OWNER
+}
+
+print("[PROTECTION] 🛡️ Owner protection active")
+print("[PROTECTION] Monitoring for owner presence...")
+
+-- ============================================================
+-- USER SCRIPT STARTS HERE
+-- ============================================================
+
+${originalScript}
+
+-- ============================================================
+-- USER SCRIPT ENDS HERE
+-- ============================================================
+
+print("[PROTECTION] Script execution completed")
+`;
+
+    const protectedScript = `-- Protected v4.3.2 - Runtime Injection
 local ${v.main} = (function()
     local Players = game:GetService("Players")
     local HttpService = game:GetService("HttpService")
@@ -55,11 +191,6 @@ local ${v.main} = (function()
     local BAN_ENDPOINT = "${banEndpoint}"
     local WHITELIST = {${whitelistStr}}
     local OWNER_IDS = {${ownerStr}}
-    
-    -- Storage for cleanup
-    local ALL_GUIS = {}
-    local ALL_CONNECTIONS = {}
-    local ALL_THREADS = {}
     
     local function isWhitelisted()
         for _, uid in ipairs(WHITELIST) do
@@ -75,105 +206,27 @@ local ${v.main} = (function()
         return false
     end
     
-    -- ============================================================
-    -- 🔴 KILL FUNCTION - Force stop everything
-    -- ============================================================
-    
-    local function ${v.kill}(reason)
-        if STOPPED then return end
-        STOPPED = true
-        ${v.active} = false
-        
-        print("[SCRIPT] ⛔ FORCE STOP:", reason)
-        
-        -- Destroy all GUIs
-        for _, gui in pairs(ALL_GUIS) do
-            pcall(function() if gui then gui:Destroy() end end)
-        end
-        
-        -- Disconnect all connections
-        for _, conn in pairs(ALL_CONNECTIONS) do
-            pcall(function() if conn then conn:Disconnect() end end)
-        end
-        
-        -- Kill all threads
-        for _, thread in pairs(ALL_THREADS) do
-            pcall(function() if thread then coroutine.close(thread) end end)
-        end
-        
-        -- Clean references
-        ALL_GUIS = {}
-        ALL_CONNECTIONS = {}
-        ALL_THREADS = {}
-        
-        -- Notification
-        pcall(function()
-            StarterGui:SetCore("SendNotification", {
-                Title = "⚠️ Script Stopped",
-                Text = reason,
-                Duration = 5
-            })
-        end)
-        
-        -- Clean global
-        if _G.SCRIPT_LOADER then
-            _G.SCRIPT_LOADER = nil
-        end
-        
-        -- Force error to stop execution
-        error("[SCRIPT] Stopped by owner detection", 0)
-    end
-    
-    -- ============================================================
-    -- 👑 OWNER DETECTION - INSTANT CHECK
-    -- ============================================================
-    
-    local function ${v.owner}()
-        -- If I am owner, skip check
+    -- Check if owner is already in server (BEFORE EXECUTION)
+    local function checkOwnerPresence()
         if isOwner(LocalPlayer.UserId) then
-            print("[SCRIPT] You are the owner - Full control")
+            print("[SCRIPT] You are the owner - Full access")
             return false
         end
         
-        -- INSTANT CHECK - Check all players NOW
         for _, player in pairs(Players:GetPlayers()) do
             if isOwner(player.UserId) and player ~= LocalPlayer then
-                print("[SCRIPT] ⛔ Owner detected:", player.Name)
-                ${v.kill}("Owner (" .. player.Name .. ") is in this server")
+                print("[SCRIPT] ⛔ Owner already in server:", player.Name)
+                StarterGui:SetCore("SendNotification", {
+                    Title = "⚠️ Cannot Load",
+                    Text = "Owner is in this server",
+                    Duration = 5
+                })
                 return true
             end
         end
         
-        -- Monitor for owner joining
-        local conn = Players.PlayerAdded:Connect(function(player)
-            if isOwner(player.UserId) then
-                print("[SCRIPT] ⛔ Owner joined:", player.Name)
-                task.wait(0.1)
-                ${v.kill}("Owner (" .. player.Name .. ") joined the server")
-            end
-        end)
-        table.insert(ALL_CONNECTIONS, conn)
-        
-        -- Periodic check (every 5 seconds)
-        local thread = task.spawn(function()
-            while ${v.active} do
-                task.wait(5)
-                for _, player in pairs(Players:GetPlayers()) do
-                    if isOwner(player.UserId) and player ~= LocalPlayer then
-                        ${v.kill}("Owner (" .. player.Name .. ") detected in server")
-                        return
-                    end
-                end
-            end
-        end)
-        table.insert(ALL_THREADS, thread)
-        
         return false
     end
-    
-    -- ============================================================
-    -- 🔧 UTILITY FUNCTIONS
-    -- ============================================================
     
     local function ${v.hwid}()
         local h = "UNKNOWN"
@@ -216,10 +269,6 @@ local ${v.main} = (function()
         LocalPlayer:Kick("⛔ BANNED\\n\\n" .. reason)
     end
     
-    -- ============================================================
-    -- 🔍 TOOL DETECTION
-    -- ============================================================
-    
     local ${v.tools} = {
         "Dex", "DEX", "DarkDex", "InfiniteYield", "IY",
         "Hydroxide", "SimpleSpy", "RemoteSpy", "BTool", "F3X"
@@ -229,9 +278,7 @@ local ${v.main} = (function()
         local found = {}
         
         for _, name in ipairs(${v.tools}) do
-            if rawget(_G, name) then
-                table.insert(found, name)
-            end
+            if rawget(_G, name) then table.insert(found, name) end
         end
         
         pcall(function()
@@ -254,10 +301,6 @@ local ${v.main} = (function()
         
         return found
     end
-    
-    -- ============================================================
-    -- 📦 DECODE SCRIPT
-    -- ============================================================
     
     local ${v.chunks} = {${scriptChunks.map((c, i) => `[${i + 1}]="${c}"`).join(',')}}
     
@@ -289,33 +332,26 @@ local ${v.main} = (function()
         return table.concat(parts)
     end
     
-    -- ============================================================
-    -- 🚀 MAIN EXECUTION
-    -- ============================================================
-    
     local function ${v.run}()
-        -- PRIORITY 1: OWNER CHECK (BEFORE ANYTHING)
-        print("[SCRIPT] Checking for owner presence...")
-        if ${v.owner}() then
-            print("[SCRIPT] Owner detected - Aborting execution")
+        -- PRIORITY 1: Check if owner already in server
+        if checkOwnerPresence() then
+            print("[SCRIPT] Aborting - Owner detected")
             return false
         end
         
-        -- PRIORITY 2: Whitelist check
+        -- PRIORITY 2: Whitelist or tool detection
         if isWhitelisted() then
-            print("[SCRIPT] Whitelisted - Bypassing tool detection")
+            print("[SCRIPT] Whitelisted")
         else
-            -- Tool detection
             local tools = ${v.detect}()
             if #tools > 0 then
                 ${v.kick}("Tools: " .. table.concat(tools, ", "), tools)
                 return false
             end
             
-            -- Runtime monitoring
+            -- Background tool monitoring
             task.spawn(function()
-                while ${v.active} do
-                    task.wait(10)
+                while task.wait(10) do
                     local t = ${v.detect}()
                     if #t > 0 then
                         ${v.kick}("Runtime: " .. table.concat(t, ", "), t)
@@ -325,8 +361,8 @@ local ${v.main} = (function()
             end)
         end
         
-        -- PRIORITY 3: Execute script
-        print("[SCRIPT] Loading main script...")
+        -- PRIORITY 3: Decode script
+        print("[SCRIPT] Decoding...")
         local content = ${v.decode}()
         
         if not content or #content < 10 then
@@ -334,35 +370,21 @@ local ${v.main} = (function()
             return false
         end
         
-        local fn, err = loadstring(content)
+        -- INJECT PROTECTION WRAPPER
+        local injectedContent = [[
+${injectedScript.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}
+]]
+        
+        print("[SCRIPT] Executing with runtime protection...")
+        local fn, err = loadstring(injectedContent)
         if not fn then
             warn("[SCRIPT] Compile error:", err)
             return false
         end
         
-        -- Wrap execution with active check
-        local wrappedFn = function()
-            -- Check if still active before every major operation
-            if not ${v.active} then
-                error("[SCRIPT] Stopped", 0)
-                return
-            end
-            
-            -- Store in global for emergency stop
-            _G.SCRIPT_LOADER = {
-                active = ${v.active},
-                stop = ${v.kill}
-            }
-            
-            -- Execute original script
-            return fn()
-        end
-        
-        local ok, msg = pcall(wrappedFn)
+        local ok, msg = pcall(fn)
         if not ok then
             warn("[SCRIPT] Runtime error:", msg)
-        else
-            print("[SCRIPT] ✅ Loaded successfully")
         end
         
         return ok
@@ -371,13 +393,9 @@ local ${v.main} = (function()
     return ${v.run}
 end)()
 
--- Execute with protection
-local success, result = pcall(${v.main})
-if not success then
-    print("[SCRIPT] Execution failed:", result)
+if ${v.main} then
+    ${v.main}()
 end
-
-${v.main} = nil
 `;
 
     return protectedScript;
