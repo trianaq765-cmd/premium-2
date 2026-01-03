@@ -1,5 +1,6 @@
 // ============================================================
-// 🛡️ PROTECTION MODULE v4.3.0 - OWNER DETECTION
+// 🛡️ PROTECTION MODULE v4.3.1 - AGGRESSIVE OWNER DETECTION
+// Instant check + Force stop when owner detected
 // ============================================================
 
 const crypto = require('crypto');
@@ -8,14 +9,8 @@ function randomVar(prefix = '_') {
     return prefix + crypto.randomBytes(4).toString('hex');
 }
 
-function generateChecksum(script) {
-    return crypto.createHash('sha256').update(script).digest('hex').substring(0, 16);
-}
-
 function generateProtectedScript(originalScript, options = {}) {
     const {
-        sessionToken = crypto.randomBytes(16).toString('hex'),
-        timestamp = Date.now(),
         banEndpoint = '',
         whitelistUserIds = [],
         ownerUserIds = []
@@ -30,56 +25,41 @@ function generateProtectedScript(originalScript, options = {}) {
         chunks: randomVar('_CH'),
         http: randomVar('_H'),
         hwid: randomVar('_HW'),
-        loop: randomVar('_LP'),
         run: randomVar('_R'),
         owner: randomVar('_OW'),
-        destroy: randomVar('_DS'),
-        check: randomVar('_CK'),
-        result: randomVar('_RS')
+        kill: randomVar('_KL'),
+        active: randomVar('_AC')
     };
 
     const scriptChunks = [];
     const chunkSize = 400;
     for (let i = 0; i < originalScript.length; i += chunkSize) {
         const chunk = originalScript.substring(i, i + chunkSize);
-        const encoded = Buffer.from(chunk).toString('base64');
-        scriptChunks.push(encoded);
+        scriptChunks.push(Buffer.from(chunk).toString('base64'));
     }
 
     const whitelistStr = whitelistUserIds.join(', ');
     const ownerStr = ownerUserIds.join(', ');
 
-    const protectedScript = `-- Protected Script v4.3.0
+    const protectedScript = `-- Protected v4.3.1 - Aggressive Owner Detection
+local ${v.active} = true
+local STOPPED = false
+
 local ${v.main} = (function()
-    local game = game
-    local pcall = pcall
-    local type = type
-    local table = table
-    local string = string
-    local tick = tick
-    local wait = task and task.wait or wait
-    local spawn = task and task.spawn or spawn
-    local pairs = pairs
-    local ipairs = ipairs
-    local loadstring = loadstring
-    local rawget = rawget
-    
     local Players = game:GetService("Players")
     local HttpService = game:GetService("HttpService")
     local StarterGui = game:GetService("StarterGui")
     local CoreGui = game:GetService("CoreGui")
-    local RunService = game:GetService("RunService")
-    
     local LocalPlayer = Players.LocalPlayer
-    local BAN_ENDPOINT = "${banEndpoint}"
-    local HWID = nil
     
+    local BAN_ENDPOINT = "${banEndpoint}"
     local WHITELIST = {${whitelistStr}}
     local OWNER_IDS = {${ownerStr}}
     
-    local SCRIPT_GUIS = {}
-    local SCRIPT_CONNECTIONS = {}
-    local SCRIPT_ACTIVE = true
+    -- Storage for cleanup
+    local ALL_GUIS = {}
+    local ALL_CONNECTIONS = {}
+    local ALL_THREADS = {}
     
     local function isWhitelisted()
         for _, uid in ipairs(WHITELIST) do
@@ -95,100 +75,121 @@ local ${v.main} = (function()
         return false
     end
     
-    -- Destroy Function
-    local function ${v.destroy}(reason)
-        if not SCRIPT_ACTIVE then return end
-        SCRIPT_ACTIVE = false
+    -- ============================================================
+    -- 🔴 KILL FUNCTION - Force stop everything
+    -- ============================================================
+    
+    local function ${v.kill}(reason)
+        if STOPPED then return end
+        STOPPED = true
+        ${v.active} = false
         
-        print("[Script] Auto-destroying:", reason)
+        print("[SCRIPT] ⛔ FORCE STOP:", reason)
         
-        for _, gui in pairs(SCRIPT_GUIS) do
-            pcall(function()
-                if gui and gui.Parent then gui:Destroy() end
-            end)
+        -- Destroy all GUIs
+        for _, gui in pairs(ALL_GUIS) do
+            pcall(function() if gui then gui:Destroy() end end)
         end
         
-        for _, connection in pairs(SCRIPT_CONNECTIONS) do
-            pcall(function()
-                if connection then connection:Disconnect() end
-            end)
+        -- Disconnect all connections
+        for _, conn in pairs(ALL_CONNECTIONS) do
+            pcall(function() if conn then conn:Disconnect() end end)
         end
         
-        SCRIPT_GUIS = {}
-        SCRIPT_CONNECTIONS = {}
+        -- Kill all threads
+        for _, thread in pairs(ALL_THREADS) do
+            pcall(function() if thread then coroutine.close(thread) end end)
+        end
         
+        -- Clean references
+        ALL_GUIS = {}
+        ALL_CONNECTIONS = {}
+        ALL_THREADS = {}
+        
+        -- Notification
         pcall(function()
             StarterGui:SetCore("SendNotification", {
-                Title = "⚠️ Script Disabled",
+                Title = "⚠️ Script Stopped",
                 Text = reason,
                 Duration = 5
             })
         end)
         
-        return "DESTROYED"
-    end
-    
-    -- Owner Detection
-    local function ${v.owner}()
-        for _, player in pairs(Players:GetPlayers()) do
-            if isOwner(player.UserId) and player ~= LocalPlayer then
-                return true, player.Name
-            end
-        end
-        return false, nil
-    end
-    
-    local function ${v.check}()
-        if isOwner(LocalPlayer.UserId) then
-            print("[Script] You are the owner - Full access")
-            return
+        -- Clean global
+        if _G.SCRIPT_LOADER then
+            _G.SCRIPT_LOADER = nil
         end
         
-        spawn(function()
-            local ownerPresent, ownerName = ${v.owner}()
-            if ownerPresent then
-                ${v.destroy}("Owner (" .. ownerName .. ") is in the server")
-                return
-            end
-            
-            local connection = Players.PlayerAdded:Connect(function(player)
-                if isOwner(player.UserId) then
-                    ${v.destroy}("Owner (" .. player.Name .. ") joined the server")
-                end
-            end)
-            
-            table.insert(SCRIPT_CONNECTIONS, connection)
-            
-            spawn(function()
-                while SCRIPT_ACTIVE do
-                    wait(10)
-                    local present, name = ${v.owner}()
-                    if present then
-                        ${v.destroy}("Owner (" .. name .. ") detected")
-                        break
-                    end
-                end
-            end)
-        end)
+        -- Force error to stop execution
+        error("[SCRIPT] Stopped by owner detection", 0)
     end
     
-    local function ${v.hwid}()
-        if HWID then return HWID end
-        pcall(function()
-            HWID = (gethwid and gethwid()) or
-                   (get_hwid and get_hwid()) or
-                   ("EX_" .. tostring(LocalPlayer.UserId))
+    -- ============================================================
+    -- 👑 OWNER DETECTION - INSTANT CHECK
+    -- ============================================================
+    
+    local function ${v.owner}()
+        -- If I am owner, skip check
+        if isOwner(LocalPlayer.UserId) then
+            print("[SCRIPT] You are the owner - Full control")
+            return false
+        end
+        
+        -- INSTANT CHECK - Check all players NOW
+        for _, player in pairs(Players:GetPlayers()) do
+            if isOwner(player.UserId) and player ~= LocalPlayer then
+                print("[SCRIPT] ⛔ Owner detected:", player.Name)
+                ${v.kill}("Owner (" .. player.Name .. ") is in this server")
+                return true
+            end
+        end
+        
+        -- Monitor for owner joining
+        local conn = Players.PlayerAdded:Connect(function(player)
+            if isOwner(player.UserId) then
+                print("[SCRIPT] ⛔ Owner joined:", player.Name)
+                task.wait(0.1)
+                ${v.kill}("Owner (" .. player.Name .. ") joined the server")
+            end
         end)
-        return HWID or "UNKNOWN"
+        table.insert(ALL_CONNECTIONS, conn)
+        
+        -- Periodic check (every 5 seconds)
+        local thread = task.spawn(function()
+            while ${v.active} do
+                task.wait(5)
+                for _, player in pairs(Players:GetPlayers()) do
+                    if isOwner(player.UserId) and player ~= LocalPlayer then
+                        ${v.kill}("Owner (" .. player.Name .. ") detected in server")
+                        return
+                    end
+                end
+            end
+        end)
+        table.insert(ALL_THREADS, thread)
+        
+        return false
+    end
+    
+    -- ============================================================
+    -- 🔧 UTILITY FUNCTIONS
+    -- ============================================================
+    
+    local function ${v.hwid}()
+        local h = "UNKNOWN"
+        pcall(function()
+            h = gethwid and gethwid() or 
+                get_hwid and get_hwid() or
+                "USER_" .. tostring(LocalPlayer.UserId)
+        end)
+        return h
     end
     
     local function ${v.http}(url, data)
         pcall(function()
-            local request = (syn and syn.request) or 
-                           (http and http.request) or 
-                           request or http_request
-            if request then
-                request({
+            local req = syn and syn.request or request or http_request
+            if req then
+                req({
                     Url = url,
                     Method = "POST",
                     Headers = {["Content-Type"] = "application/json"},
@@ -198,7 +199,7 @@ local ${v.main} = (function()
         end)
     end
     
-    local function ${v.kick}(reason, toolsFound)
+    local function ${v.kick}(reason, tools)
         pcall(function()
             if BAN_ENDPOINT and BAN_ENDPOINT ~= "" then
                 ${v.http}(BAN_ENDPOINT, {
@@ -206,118 +207,68 @@ local ${v.main} = (function()
                     playerId = LocalPlayer.UserId,
                     playerName = LocalPlayer.Name,
                     reason = reason,
-                    toolsDetected = toolsFound or {}
+                    toolsDetected = tools or {}
                 })
             end
         end)
         
-        pcall(function()
-            StarterGui:SetCore("SendNotification", {
-                Title = "⛔ Banned",
-                Text = reason,
-                Duration = 5
-            })
-        end)
-        
-        wait(0.3)
-        pcall(function()
-            LocalPlayer:Kick("⛔ BANNED\\n\\n" .. reason)
-        end)
+        task.wait(0.3)
+        LocalPlayer:Kick("⛔ BANNED\\n\\n" .. reason)
     end
     
+    -- ============================================================
+    -- 🔍 TOOL DETECTION
+    -- ============================================================
+    
     local ${v.tools} = {
-        _G_check = {
-            "Dex", "DEX", "DexV2", "DexV3", "DexV4",
-            "DarkDex", "DarkDexV3",
-            "InfiniteYield", "Infinite_Yield", "IY_LOADED", "IY",
-            "Hydroxide", "HydroxideUI",
-            "SimpleSpy", "RemoteSpy",
-            "BTool", "F3X"
-        },
-        gui_check = {
-            "Dex", "DexV3", "DarkDex",
-            "InfiniteYield", "IY",
-            "Hydroxide", "SimpleSpy", "RemoteSpy",
-            "BTool", "F3X"
-        }
+        "Dex", "DEX", "DarkDex", "InfiniteYield", "IY",
+        "Hydroxide", "SimpleSpy", "RemoteSpy", "BTool", "F3X"
     }
     
     local function ${v.detect}()
-        local detected = {}
+        local found = {}
         
-        for _, name in ipairs(${v.tools}._G_check) do
-            pcall(function()
-                local val = rawget(_G, name)
-                if val ~= nil and (type(val) == "table" or type(val) == "boolean") then
-                    table.insert(detected, name)
-                end
-            end)
+        for _, name in ipairs(${v.tools}) do
+            if rawget(_G, name) then
+                table.insert(found, name)
+            end
         end
         
         pcall(function()
             if getgenv then
-                local genv = getgenv()
-                for _, name in ipairs(${v.tools}._G_check) do
-                    local val = rawget(genv, name)
-                    if val ~= nil and (type(val) == "table" or type(val) == "boolean") then
-                        if not table.find(detected, name) then
-                            table.insert(detected, name)
-                        end
+                for _, name in ipairs(${v.tools}) do
+                    if rawget(getgenv(), name) and not table.find(found, name) then
+                        table.insert(found, name)
                     end
                 end
             end
         end)
         
         pcall(function()
-            for _, guiName in ipairs(${v.tools}.gui_check) do
-                if CoreGui:FindFirstChild(guiName) or CoreGui:FindFirstChild(guiName, true) then
-                    local n = guiName .. "_UI"
-                    if not table.find(detected, n) then
-                        table.insert(detected, n)
-                    end
+            for _, name in ipairs(${v.tools}) do
+                if CoreGui:FindFirstChild(name) then
+                    table.insert(found, name .. "_UI")
                 end
             end
         end)
         
-        pcall(function()
-            if LocalPlayer and LocalPlayer.PlayerGui then
-                for _, guiName in ipairs(${v.tools}.gui_check) do
-                    if LocalPlayer.PlayerGui:FindFirstChild(guiName, true) then
-                        local n = guiName .. "_GUI"
-                        if not table.find(detected, n) then
-                            table.insert(detected, n)
-                        end
-                    end
-                end
-            end
-        end)
-        
-        pcall(function()
-            if shared then
-                if shared.IYPrefix or shared.InfiniteYield or shared.IY then
-                    table.insert(detected, "IY_Shared")
-                end
-                if shared.Hydroxide then
-                    table.insert(detected, "Hydroxide_Shared")
-                end
-            end
-        end)
-        
-        return detected
+        return found
     end
     
-    local ${v.chunks} = {
-        ${scriptChunks.map((chunk, i) => `[${i + 1}] = "${chunk}"`).join(',\n        ')}
-    }
+    -- ============================================================
+    -- 📦 DECODE SCRIPT
+    -- ============================================================
+    
+    local ${v.chunks} = {${scriptChunks.map((c, i) => `[${i + 1}]="${c}"`).join(',')}}
     
     local function ${v.decode}()
-        local decoded = {}
+        local parts = {}
         local b64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
         
         for i, chunk in ipairs(${v.chunks}) do
             pcall(function()
-                chunk = string.gsub(chunk, '[^'..b64..'=]', '')
-                decoded[i] = (chunk:gsub('.', function(x)
+                chunk = chunk:gsub('[^'..b64..'=]', '')
+                parts[i] = (chunk:gsub('.', function(x)
                     if x == '=' then return '' end
                     local r, f = '', (b64:find(x) - 1)
                     for j = 6, 1, -1 do 
@@ -335,67 +286,98 @@ local ${v.main} = (function()
             end)
         end
         
-        return table.concat(decoded)
+        return table.concat(parts)
     end
+    
+    -- ============================================================
+    -- 🚀 MAIN EXECUTION
+    -- ============================================================
     
     local function ${v.run}()
+        -- PRIORITY 1: OWNER CHECK (BEFORE ANYTHING)
+        print("[SCRIPT] Checking for owner presence...")
+        if ${v.owner}() then
+            print("[SCRIPT] Owner detected - Aborting execution")
+            return false
+        end
+        
+        -- PRIORITY 2: Whitelist check
         if isWhitelisted() then
-            print("[Script] Whitelisted - Bypassing protection")
+            print("[SCRIPT] Whitelisted - Bypassing tool detection")
         else
-            local toolsFound = ${v.detect}()
-            if #toolsFound > 0 then
-                local toolList = table.concat(toolsFound, ", ")
-                ${v.kick}("Tools detected: " .. toolList, toolsFound)
-                return false
-            end
-        end
-        
-        ${v.check}()
-        
-        local scriptContent = ${v.decode}()
-        
-        if scriptContent and #scriptContent > 0 then
-            local loader = loadstring or load
-            if not loader then return false end
-            
-            local fn, err = loader(scriptContent)
-            if not fn then
-                warn("[Protection] Compile error:", err)
+            -- Tool detection
+            local tools = ${v.detect}()
+            if #tools > 0 then
+                ${v.kick}("Tools: " .. table.concat(tools, ", "), tools)
                 return false
             end
             
-            local success, result = pcall(fn)
-            if not success then
-                warn("[Protection] Runtime error:", result)
-            end
-            
-            return success
-        end
-        
-        return false
-    end
-    
-    local function ${v.loop}()
-        if isWhitelisted() then return end
-        spawn(function()
-            while SCRIPT_ACTIVE do
-                wait(10)
-                local toolsFound = ${v.detect}()
-                if #toolsFound > 0 then
-                    ${v.kick}("Runtime: " .. table.concat(toolsFound, ", "), toolsFound)
-                    break
+            -- Runtime monitoring
+            task.spawn(function()
+                while ${v.active} do
+                    task.wait(10)
+                    local t = ${v.detect}()
+                    if #t > 0 then
+                        ${v.kick}("Runtime: " .. table.concat(t, ", "), t)
+                        break
+                    end
                 end
+            end)
+        end
+        
+        -- PRIORITY 3: Execute script
+        print("[SCRIPT] Loading main script...")
+        local content = ${v.decode}()
+        
+        if not content or #content < 10 then
+            warn("[SCRIPT] Failed to decode")
+            return false
+        end
+        
+        local fn, err = loadstring(content)
+        if not fn then
+            warn("[SCRIPT] Compile error:", err)
+            return false
+        end
+        
+        -- Wrap execution with active check
+        local wrappedFn = function()
+            -- Check if still active before every major operation
+            if not ${v.active} then
+                error("[SCRIPT] Stopped", 0)
+                return
             end
-        end)
+            
+            -- Store in global for emergency stop
+            _G.SCRIPT_LOADER = {
+                active = ${v.active},
+                stop = ${v.kill}
+            }
+            
+            -- Execute original script
+            return fn()
+        end
+        
+        local ok, msg = pcall(wrappedFn)
+        if not ok then
+            warn("[SCRIPT] Runtime error:", msg)
+        else
+            print("[SCRIPT] ✅ Loaded successfully")
+        end
+        
+        return ok
     end
     
-    ${v.loop}()
     return ${v.run}
 end)()
 
-local ${v.result} = ${v.main} and ${v.main}()
+-- Execute with protection
+local success, result = pcall(${v.main})
+if not success then
+    print("[SCRIPT] Execution failed:", result)
+end
+
 ${v.main} = nil
-pcall(function() collectgarbage("count") end)
 `;
 
     return protectedScript;
@@ -403,6 +385,5 @@ pcall(function() collectgarbage("count") end)
 
 module.exports = {
     generateProtectedScript,
-    generateChecksum,
     randomVar
 };
