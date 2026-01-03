@@ -1,6 +1,6 @@
 // ============================================================
-// 🛡️ PROTECTION MODULE v4.4.0 - OPTIMIZED PERFORMANCE
-// Reduced lag, optimized monitoring, efficient tracking
+// 🛡️ PROTECTION MODULE v4.5.0 - CLEAN SHUTDOWN
+// No errors, clean memory, preserve character movement
 // ============================================================
 
 const crypto = require('crypto');
@@ -38,10 +38,10 @@ function generateProtectedScript(originalScript, options = {}) {
     const whitelistStr = whitelistUserIds.join(', ');
     const ownerStr = ownerUserIds.join(', ');
 
-    // Optimized protection wrapper
+    // Clean shutdown protection
     const protectionWrapper = `
 -- ============================================================
--- OWNER PROTECTION v4.4.0 - PERFORMANCE OPTIMIZED
+-- OWNER PROTECTION v4.5.0 - CLEAN SHUTDOWN
 -- ============================================================
 
 local _OWNER_IDS = {${ownerStr}}
@@ -50,57 +50,85 @@ local _LOCAL = _PLAYERS.LocalPlayer
 local _STAR_GUI = game:GetService("StarterGui")
 local _CORE_GUI = game:GetService("CoreGui")
 local _PLAYER_GUI = _LOCAL:WaitForChild("PlayerGui")
+local _RUN_SERVICE = game:GetService("RunService")
 local _ACTIVE = true
+local _SHUTTING_DOWN = false
 local _TRACKED_GUIS = {}
 local _CONNECTIONS = {}
-local _SCRIPT_TAG = "LS_" .. tostring(math.random(100000, 999999))
+local _THREADS = {}
+local _SCRIPT_TAG = "LS_" .. tostring(tick()):gsub("%.", "")
 
--- Cached owner check
-local _IS_OWNER_CACHED = {}
+-- Owner check (cached)
+local _owner_cache = {}
 local function _IS_OWNER(uid)
-    if _IS_OWNER_CACHED[uid] ~= nil then
-        return _IS_OWNER_CACHED[uid]
-    end
-    
+    if _owner_cache[uid] ~= nil then return _owner_cache[uid] end
     for _, id in ipairs(_OWNER_IDS) do
         if uid == id then
-            _IS_OWNER_CACHED[uid] = true
+            _owner_cache[uid] = true
             return true
         end
     end
-    
-    _IS_OWNER_CACHED[uid] = false
+    _owner_cache[uid] = false
     return false
 end
 
--- Optimized GUI cleanup
-local function _CLEANUP()
-    if not _ACTIVE then return end
+-- CLEAN SHUTDOWN - No errors, clean memory
+local function _SHUTDOWN()
+    if _SHUTTING_DOWN then return end
+    _SHUTTING_DOWN = true
     _ACTIVE = false
     
-    -- Disconnect connections first (stop events)
-    for _, c in pairs(_CONNECTIONS) do
-        pcall(function() if c.Connected then c:Disconnect() end end)
+    print("[PROTECTION] Clean shutdown initiated...")
+    
+    -- STEP 1: Cancel all threads FIRST (stop loops)
+    for i = #_THREADS, 1, -1 do
+        pcall(function()
+            task.cancel(_THREADS[i])
+        end)
+        _THREADS[i] = nil
+    end
+    _THREADS = {}
+    
+    -- STEP 2: Disconnect all connections (stop events)
+    for i = #_CONNECTIONS, 1, -1 do
+        pcall(function()
+            if _CONNECTIONS[i] and _CONNECTIONS[i].Connected then
+                _CONNECTIONS[i]:Disconnect()
+            end
+        end)
+        _CONNECTIONS[i] = nil
     end
     _CONNECTIONS = {}
     
-    -- Destroy tracked GUIs
-    local count = 0
-    for _, gui in pairs(_TRACKED_GUIS) do
+    -- STEP 3: Wait a frame for everything to stop
+    task.wait()
+    
+    -- STEP 4: Destroy GUIs gracefully (no errors)
+    local destroyed = 0
+    for i = #_TRACKED_GUIS, 1, -1 do
         pcall(function()
+            local gui = _TRACKED_GUIS[i]
             if gui and gui.Parent then
+                -- Set Enabled to false first (prevent errors)
+                if gui:IsA("ScreenGui") then
+                    gui.Enabled = false
+                end
+                -- Then destroy
                 gui:Destroy()
-                count = count + 1
+                destroyed = destroyed + 1
             end
         end)
+        _TRACKED_GUIS[i] = nil
     end
     _TRACKED_GUIS = {}
     
-    -- Find and destroy tagged GUIs (fallback)
-    task.defer(function()
+    -- STEP 5: Clean tagged GUIs (fallback)
+    task.spawn(function()
+        task.wait(0.1)
         pcall(function()
             for _, child in pairs(_CORE_GUI:GetChildren()) do
                 if child:GetAttribute(_SCRIPT_TAG) then
+                    if child:IsA("ScreenGui") then child.Enabled = false end
                     child:Destroy()
                 end
             end
@@ -108,32 +136,49 @@ local function _CLEANUP()
         pcall(function()
             for _, child in pairs(_PLAYER_GUI:GetChildren()) do
                 if child:GetAttribute(_SCRIPT_TAG) then
+                    if child:IsA("ScreenGui") then child.Enabled = false end
                     child:Destroy()
                 end
             end
         end)
     end)
     
-    -- Notification
+    -- STEP 6: Clear global references
+    _G._OWNER_PROTECTION = nil
+    _G.LOADER_SCRIPT = nil
+    
+    -- STEP 7: Force garbage collection
+    task.spawn(function()
+        task.wait(0.5)
+        for i = 1, 3 do
+            pcall(function() collectgarbage("collect") end)
+            task.wait(0.1)
+        end
+    end)
+    
+    -- STEP 8: Notification (non-blocking)
     task.defer(function()
         pcall(function()
             _STAR_GUI:SetCore("SendNotification", {
-                Title = "⚠️ Stopped",
+                Title = "⚠️ Script Stopped",
                 Text = "Owner detected",
                 Duration = 3
             })
         end)
     end)
+    
+    print("[PROTECTION] Shutdown complete - Destroyed", destroyed, "GUIs")
 end
 
--- Lightweight GUI tracking (debounced)
-local _last_track_time = 0
-local function _TRACK_GUI(gui)
+-- Lightweight tracking (with debounce)
+local _last_track = 0
+local function _TRACK(gui)
     local now = tick()
-    if now - _last_track_time < 0.1 then return end -- Debounce 100ms
-    _last_track_time = now
+    if now - _last_track < 0.05 then return end
+    _last_track = now
     
     task.defer(function()
+        if not _ACTIVE then return end
         pcall(function()
             gui:SetAttribute(_SCRIPT_TAG, true)
             table.insert(_TRACKED_GUIS, gui)
@@ -141,45 +186,47 @@ local function _TRACK_GUI(gui)
     end)
 end
 
--- Start tracking (optimized)
+-- Start tracking
 task.defer(function()
-    local conn1 = _CORE_GUI.DescendantAdded:Connect(function(d)
-        if d:IsA("ScreenGui") then
-            _TRACK_GUI(d)
-        end
-    end)
-    table.insert(_CONNECTIONS, conn1)
+    if not _ACTIVE then return end
     
-    local conn2 = _PLAYER_GUI.DescendantAdded:Connect(function(d)
-        if d:IsA("ScreenGui") then
-            _TRACK_GUI(d)
+    local c1 = _CORE_GUI.DescendantAdded:Connect(function(d)
+        if _ACTIVE and d:IsA("ScreenGui") then
+            _TRACK(d)
         end
     end)
-    table.insert(_CONNECTIONS, conn2)
+    table.insert(_CONNECTIONS, c1)
+    
+    local c2 = _PLAYER_GUI.DescendantAdded:Connect(function(d)
+        if _ACTIVE and d:IsA("ScreenGui") then
+            _TRACK(d)
+        end
+    end)
+    table.insert(_CONNECTIONS, c2)
 end)
 
 -- Owner monitoring (reduced frequency)
-task.spawn(function()
+local monitor = task.spawn(function()
     while _ACTIVE do
-        task.wait(15) -- Check every 15 seconds (reduced from 3)
-        
+        task.wait(15)
         if not _ACTIVE then break end
         
-        -- Quick check
         for _, p in pairs(_PLAYERS:GetPlayers()) do
             if p ~= _LOCAL and _IS_OWNER(p.UserId) then
-                _CLEANUP()
+                _SHUTDOWN()
                 return
             end
         end
     end
 end)
+table.insert(_THREADS, monitor)
 
--- Player joined (instant response)
+-- Player joined monitor
 local pconn = _PLAYERS.PlayerAdded:Connect(function(p)
+    if not _ACTIVE then return end
+    task.wait(1)
     if _IS_OWNER(p.UserId) then
-        task.wait(1) -- Small delay for player to load
-        _CLEANUP()
+        _SHUTDOWN()
     end
 end)
 table.insert(_CONNECTIONS, pconn)
@@ -187,7 +234,8 @@ table.insert(_CONNECTIONS, pconn)
 -- Global access
 _G._OWNER_PROTECTION = {
     active = function() return _ACTIVE end,
-    stop = _CLEANUP
+    stop = _SHUTDOWN,
+    tag = _SCRIPT_TAG
 }
 
 -- ============================================================
@@ -195,7 +243,7 @@ _G._OWNER_PROTECTION = {
 -- ============================================================
 `;
 
-    const protectedScript = `-- Protected v4.4.0 - Optimized
+    const protectedScript = `-- Protected v4.5.0 - Clean Shutdown
 local ${v.main} = (function()
     local Players = game:GetService("Players")
     local HttpService = game:GetService("HttpService")
@@ -207,60 +255,56 @@ local ${v.main} = (function()
     local WHITELIST = {${whitelistStr}}
     local OWNER_IDS = {${ownerStr}}
     
-    -- Cached checks
-    local _is_whitelisted = nil
+    local _wl_cache = nil
     local function isWhitelisted()
-        if _is_whitelisted ~= nil then return _is_whitelisted end
+        if _wl_cache ~= nil then return _wl_cache end
         for _, uid in ipairs(WHITELIST) do
             if LocalPlayer.UserId == uid then
-                _is_whitelisted = true
+                _wl_cache = true
                 return true
             end
         end
-        _is_whitelisted = false
+        _wl_cache = false
         return false
     end
     
-    local _is_owner_cached = {}
-    local function isOwner(userId)
-        if _is_owner_cached[userId] ~= nil then
-            return _is_owner_cached[userId]
-        end
-        for _, uid in ipairs(OWNER_IDS) do
-            if userId == uid then
-                _is_owner_cached[userId] = true
+    local _owner_cache = {}
+    local function isOwner(uid)
+        if _owner_cache[uid] ~= nil then return _owner_cache[uid] end
+        for _, id in ipairs(OWNER_IDS) do
+            if uid == id then
+                _owner_cache[uid] = true
                 return true
             end
         end
-        _is_owner_cached[userId] = false
+        _owner_cache[uid] = false
         return false
     end
     
     local function checkOwnerPresence()
-        if isOwner(LocalPlayer.UserId) then
-            return false
-        end
+        if isOwner(LocalPlayer.UserId) then return false end
         
-        for _, player in pairs(Players:GetPlayers()) do
-            if isOwner(player.UserId) and player ~= LocalPlayer then
-                StarterGui:SetCore("SendNotification", {
-                    Title = "⚠️ Cannot Load",
-                    Text = "Owner is in server",
-                    Duration = 3
-                })
+        for _, p in pairs(Players:GetPlayers()) do
+            if isOwner(p.UserId) and p ~= LocalPlayer then
+                task.defer(function()
+                    StarterGui:SetCore("SendNotification", {
+                        Title = "⚠️ Cannot Load",
+                        Text = "Owner in server",
+                        Duration = 3
+                    })
+                end)
                 return true
             end
         end
-        
         return false
     end
     
     local function ${v.hwid}()
-        local h = "UNKNOWN"
+        local h = "U"
         pcall(function()
             h = gethwid and gethwid() or 
                 get_hwid and get_hwid() or
-                "U_" .. tostring(LocalPlayer.UserId)
+                "U" .. tostring(LocalPlayer.UserId)
         end)
         return h
     end
@@ -298,11 +342,10 @@ local ${v.main} = (function()
             })
         end)
         
-        task.wait(0.5)
+        task.wait(0.3)
         LocalPlayer:Kick("⛔ BANNED\\n\\n" .. reason)
     end
     
-    -- Optimized tool detection (reduced checks)
     local ${v.tools} = {
         "dex", "darkdex", "infiniteyield", "iy",
         "hydroxide", "simplespy", "remotespy",
@@ -312,30 +355,27 @@ local ${v.main} = (function()
     local function ${v.detect}()
         local found = {}
         
-        -- Quick check _G (optimized)
-        for key, value in pairs(_G) do
-            if type(value) == "table" or type(value) == "boolean" then
-                local keyLower = tostring(key):lower()
-                for _, tool in ipairs(${v.tools}) do
-                    if keyLower:find(tool) then
-                        table.insert(found, tostring(key))
+        for k, v in pairs(_G) do
+            if type(v) == "table" or type(v) == "boolean" then
+                local kl = tostring(k):lower()
+                for _, t in ipairs(${v.tools}) do
+                    if kl:find(t) then
+                        table.insert(found, tostring(k))
                         break
                     end
                 end
             end
         end
         
-        -- Check getgenv (if exists)
         if #found == 0 then
             pcall(function()
                 if getgenv then
-                    local genv = getgenv()
-                    for key, value in pairs(genv) do
-                        if type(value) == "table" or type(value) == "boolean" then
-                            local keyLower = tostring(key):lower()
-                            for _, tool in ipairs(${v.tools}) do
-                                if keyLower:find(tool) then
-                                    table.insert(found, tostring(key))
+                    for k, v in pairs(getgenv()) do
+                        if type(v) == "table" or type(v) == "boolean" then
+                            local kl = tostring(k):lower()
+                            for _, t in ipairs(${v.tools}) do
+                                if kl:find(t) then
+                                    table.insert(found, tostring(k))
                                     break
                                 end
                             end
@@ -345,15 +385,14 @@ local ${v.main} = (function()
             end)
         end
         
-        -- Check CoreGui (only if needed)
         if #found == 0 then
             pcall(function()
-                for _, child in pairs(CoreGui:GetChildren()) do
-                    if child:IsA("ScreenGui") then
-                        local nameLower = child.Name:lower()
-                        for _, tool in ipairs(${v.tools}) do
-                            if nameLower:find(tool) then
-                                table.insert(found, child.Name)
+                for _, c in pairs(CoreGui:GetChildren()) do
+                    if c:IsA("ScreenGui") then
+                        local nl = c.Name:lower()
+                        for _, t in ipairs(${v.tools}) do
+                            if nl:find(t) then
+                                table.insert(found, c.Name)
                                 break
                             end
                         end
@@ -368,67 +407,60 @@ local ${v.main} = (function()
     local ${v.chunks} = {${scriptChunks.map((c, i) => `[${i + 1}]="${c}"`).join(',')}}
     
     local function ${v.decode}()
-        local parts = {}
-        local b64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+        local p = {}
+        local b = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
         
-        for i, chunk in ipairs(${v.chunks}) do
+        for i, c in ipairs(${v.chunks}) do
             pcall(function()
-                chunk = chunk:gsub('[^'..b64..'=]', '')
-                parts[i] = (chunk:gsub('.', function(x)
+                c = c:gsub('[^'..b..'=]', '')
+                p[i] = (c:gsub('.', function(x)
                     if x == '=' then return '' end
-                    local r, f = '', (b64:find(x) - 1)
+                    local r, f = '', (b:find(x) - 1)
                     for j = 6, 1, -1 do 
                         r = r .. (f % 2^j - f % 2^(j-1) > 0 and '1' or '0') 
                     end
                     return r
                 end):gsub('%d%d%d?%d?%d?%d?%d?%d?', function(x)
                     if #x ~= 8 then return '' end
-                    local c = 0
+                    local n = 0
                     for j = 1, 8 do 
-                        c = c + (x:sub(j,j) == '1' and 2^(8-j) or 0) 
+                        n = n + (x:sub(j,j) == '1' and 2^(8-j) or 0) 
                     end
-                    return string.char(c)
+                    return string.char(n)
                 end))
             end)
         end
         
-        return table.concat(parts)
+        return table.concat(p)
     end
     
     local function ${v.run}()
-        if checkOwnerPresence() then
-            return false
-        end
+        if checkOwnerPresence() then return false end
         
-        if isWhitelisted() then
-            -- Skip detection for whitelisted
-        else
-            local tools = ${v.detect}()
-            if #tools > 0 then
-                ${v.kick}("Tools: " .. tools[1], tools)
+        if not isWhitelisted() then
+            local t = ${v.detect}()
+            if #t > 0 then
+                ${v.kick}("Tools: " .. t[1], t)
                 return false
             end
             
-            -- Background monitoring (reduced frequency)
             task.spawn(function()
-                while task.wait(20) do -- Every 20 seconds (reduced from 5)
-                    local t = ${v.detect}()
-                    if #t > 0 then
-                        ${v.kick}("Runtime: " .. t[1], t)
+                while task.wait(20) do
+                    local x = ${v.detect}()
+                    if #x > 0 then
+                        ${v.kick}("Runtime: " .. x[1], x)
                         break
                     end
                 end
             end)
         end
         
-        local content = ${v.decode}()
-        if not content or #content < 10 then
-            return false
-        end
+        local s = ${v.decode}()
+        if not s or #s < 10 then return false end
         
-        local finalScript = [[${protectionWrapper.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}]] .. content
+        local fs = [[${protectionWrapper.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}]] .. s
         
-        local fn = loadstring(finalScript)
+        local fn = loadstring(fs)
         if fn then
             return pcall(fn)
         end
