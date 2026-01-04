@@ -1,6 +1,6 @@
 // ============================================================
-// 🛡️ PROTECTION MODULE v4.5.0 - CLEAN SHUTDOWN
-// No errors, clean memory, preserve character movement
+// 🛡️ PROTECTION MODULE v4.5.1 - GAME-SPECIFIC LOCK
+// Only works in whitelisted games
 // ============================================================
 
 const crypto = require('crypto');
@@ -13,7 +13,8 @@ function generateProtectedScript(originalScript, options = {}) {
     const {
         banEndpoint = '',
         whitelistUserIds = [],
-        ownerUserIds = []
+        ownerUserIds = [],
+        allowedPlaceIds = [] // NEW: Whitelist games
     } = options;
 
     const v = {
@@ -25,7 +26,8 @@ function generateProtectedScript(originalScript, options = {}) {
         chunks: randomVar('_CH'),
         http: randomVar('_H'),
         hwid: randomVar('_HW'),
-        run: randomVar('_R')
+        run: randomVar('_R'),
+        game: randomVar('_GM')
     };
 
     const scriptChunks = [];
@@ -37,20 +39,20 @@ function generateProtectedScript(originalScript, options = {}) {
 
     const whitelistStr = whitelistUserIds.join(', ');
     const ownerStr = ownerUserIds.join(', ');
+    const allowedGamesStr = allowedPlaceIds.join(', ');
 
-    // Clean shutdown protection
     const protectionWrapper = `
 -- ============================================================
--- OWNER PROTECTION v4.5.0 - CLEAN SHUTDOWN
+-- OWNER PROTECTION v4.5.1 - GAME LOCK
 -- ============================================================
 
 local _OWNER_IDS = {${ownerStr}}
+local _ALLOWED_GAMES = {${allowedGamesStr}}
 local _PLAYERS = game:GetService("Players")
 local _LOCAL = _PLAYERS.LocalPlayer
 local _STAR_GUI = game:GetService("StarterGui")
 local _CORE_GUI = game:GetService("CoreGui")
 local _PLAYER_GUI = _LOCAL:WaitForChild("PlayerGui")
-local _RUN_SERVICE = game:GetService("RunService")
 local _ACTIVE = true
 local _SHUTTING_DOWN = false
 local _TRACKED_GUIS = {}
@@ -72,7 +74,7 @@ local function _IS_OWNER(uid)
     return false
 end
 
--- CLEAN SHUTDOWN - No errors, clean memory
+-- CLEAN SHUTDOWN
 local function _SHUTDOWN()
     if _SHUTTING_DOWN then return end
     _SHUTTING_DOWN = true
@@ -80,16 +82,12 @@ local function _SHUTDOWN()
     
     print("[PROTECTION] Clean shutdown initiated...")
     
-    -- STEP 1: Cancel all threads FIRST (stop loops)
     for i = #_THREADS, 1, -1 do
-        pcall(function()
-            task.cancel(_THREADS[i])
-        end)
+        pcall(function() task.cancel(_THREADS[i]) end)
         _THREADS[i] = nil
     end
     _THREADS = {}
     
-    -- STEP 2: Disconnect all connections (stop events)
     for i = #_CONNECTIONS, 1, -1 do
         pcall(function()
             if _CONNECTIONS[i] and _CONNECTIONS[i].Connected then
@@ -100,20 +98,14 @@ local function _SHUTDOWN()
     end
     _CONNECTIONS = {}
     
-    -- STEP 3: Wait a frame for everything to stop
     task.wait()
     
-    -- STEP 4: Destroy GUIs gracefully (no errors)
     local destroyed = 0
     for i = #_TRACKED_GUIS, 1, -1 do
         pcall(function()
             local gui = _TRACKED_GUIS[i]
             if gui and gui.Parent then
-                -- Set Enabled to false first (prevent errors)
-                if gui:IsA("ScreenGui") then
-                    gui.Enabled = false
-                end
-                -- Then destroy
+                if gui:IsA("ScreenGui") then gui.Enabled = false end
                 gui:Destroy()
                 destroyed = destroyed + 1
             end
@@ -122,7 +114,6 @@ local function _SHUTDOWN()
     end
     _TRACKED_GUIS = {}
     
-    -- STEP 5: Clean tagged GUIs (fallback)
     task.spawn(function()
         task.wait(0.1)
         pcall(function()
@@ -143,11 +134,9 @@ local function _SHUTDOWN()
         end)
     end)
     
-    -- STEP 6: Clear global references
     _G._OWNER_PROTECTION = nil
     _G.LOADER_SCRIPT = nil
     
-    -- STEP 7: Force garbage collection
     task.spawn(function()
         task.wait(0.5)
         for i = 1, 3 do
@@ -156,7 +145,6 @@ local function _SHUTDOWN()
         end
     end)
     
-    -- STEP 8: Notification (non-blocking)
     task.defer(function()
         pcall(function()
             _STAR_GUI:SetCore("SendNotification", {
@@ -170,7 +158,7 @@ local function _SHUTDOWN()
     print("[PROTECTION] Shutdown complete - Destroyed", destroyed, "GUIs")
 end
 
--- Lightweight tracking (with debounce)
+-- Lightweight tracking
 local _last_track = 0
 local function _TRACK(gui)
     local now = tick()
@@ -191,21 +179,17 @@ task.defer(function()
     if not _ACTIVE then return end
     
     local c1 = _CORE_GUI.DescendantAdded:Connect(function(d)
-        if _ACTIVE and d:IsA("ScreenGui") then
-            _TRACK(d)
-        end
+        if _ACTIVE and d:IsA("ScreenGui") then _TRACK(d) end
     end)
     table.insert(_CONNECTIONS, c1)
     
     local c2 = _PLAYER_GUI.DescendantAdded:Connect(function(d)
-        if _ACTIVE and d:IsA("ScreenGui") then
-            _TRACK(d)
-        end
+        if _ACTIVE and d:IsA("ScreenGui") then _TRACK(d) end
     end)
     table.insert(_CONNECTIONS, c2)
 end)
 
--- Owner monitoring (reduced frequency)
+-- Owner monitoring
 local monitor = task.spawn(function()
     while _ACTIVE do
         task.wait(15)
@@ -221,7 +205,6 @@ local monitor = task.spawn(function()
 end)
 table.insert(_THREADS, monitor)
 
--- Player joined monitor
 local pconn = _PLAYERS.PlayerAdded:Connect(function(p)
     if not _ACTIVE then return end
     task.wait(1)
@@ -231,7 +214,6 @@ local pconn = _PLAYERS.PlayerAdded:Connect(function(p)
 end)
 table.insert(_CONNECTIONS, pconn)
 
--- Global access
 _G._OWNER_PROTECTION = {
     active = function() return _ACTIVE end,
     stop = _SHUTDOWN,
@@ -243,7 +225,7 @@ _G._OWNER_PROTECTION = {
 -- ============================================================
 `;
 
-    const protectedScript = `-- Protected v4.5.0 - Clean Shutdown
+    const protectedScript = `-- Protected v4.5.1 - Game Lock
 local ${v.main} = (function()
     local Players = game:GetService("Players")
     local HttpService = game:GetService("HttpService")
@@ -254,6 +236,64 @@ local ${v.main} = (function()
     local BAN_ENDPOINT = "${banEndpoint}"
     local WHITELIST = {${whitelistStr}}
     local OWNER_IDS = {${ownerStr}}
+    local ALLOWED_GAMES = {${allowedGamesStr}}
+    
+    -- ============================================================
+    -- 🎮 GAME VERIFICATION - PRIORITY CHECK
+    -- ============================================================
+    
+    local function ${v.game}()
+        local currentPlaceId = game.PlaceId
+        
+        -- If no games whitelisted, allow all
+        if #ALLOWED_GAMES == 0 then
+            return true, "No game restriction"
+        end
+        
+        -- Check if current game is allowed
+        for _, placeId in ipairs(ALLOWED_GAMES) do
+            if currentPlaceId == placeId then
+                print("[GAME] ✅ Game verified:", currentPlaceId)
+                return true, "Game allowed"
+            end
+        end
+        
+        -- Game not allowed
+        print("[GAME] ❌ Unauthorized game:", currentPlaceId)
+        return false, currentPlaceId
+    end
+    
+    -- Check game FIRST (before anything else)
+    local gameAllowed, gameInfo = ${v.game}()
+    
+    if not gameAllowed then
+        -- Show notification
+        task.defer(function()
+            pcall(function()
+                StarterGui:SetCore("SendNotification", {
+                    Title = "⛔ Wrong Game",
+                    Text = "This script doesn't work here",
+                    Duration = 5
+                })
+            end)
+        end)
+        
+        -- Wait then kick
+        task.wait(1)
+        
+        LocalPlayer:Kick(
+            "⛔ WRONG GAME\\n\\n" ..
+            "This script only works in specific games.\\n\\n" ..
+            "Current Game ID: " .. tostring(gameInfo) .. "\\n" ..
+            "You cannot use this script here."
+        )
+        
+        return false
+    end
+    
+    -- ============================================================
+    -- 🔒 CONTINUE WITH NORMAL PROTECTION
+    -- ============================================================
     
     local _wl_cache = nil
     local function isWhitelisted()
@@ -435,6 +475,8 @@ local ${v.main} = (function()
     end
     
     local function ${v.run}()
+        -- Game already verified above (kicked if wrong game)
+        
         if checkOwnerPresence() then return false end
         
         if not isWhitelisted() then
