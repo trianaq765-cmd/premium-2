@@ -1,11 +1,12 @@
 {
   "name": "premium-loader",
   "version": "5.1.0",
-  "description": "Secure Roblox Script Loader",
+  "description": "Secure Roblox Script Loader with Full Protection Features",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "node src/index.js"
+    "dev": "node src/index.js",
+    "test": "echo \"No tests specified\" && exit 0"
   },
   "dependencies": {
     "express": "^4.18.2",
@@ -16,5 +17,18 @@
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "keywords": [
+    "roblox",
+    "loader",
+    "protection",
+    "script",
+    "secure"
+  ],
+  "author": "Premium Loader",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": ""
   }
 }
