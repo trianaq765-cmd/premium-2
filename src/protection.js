@@ -1,3 +1,7 @@
+// ============================================================
+// 🛡️ PROTECTION MODULE - v5.1.0
+// ============================================================
+
 const crypto = require('crypto');
 
 function randomVar(prefix = '_') {
@@ -23,7 +27,7 @@ function generateProtectedScript(originalScript, options = {}) {
         whitelistUserIds = [],
         ownerUserIds = [],
         allowedPlaceIds = [],
-        sessionKey = null  // NEW: untuk enkripsi
+        sessionKey = null
     } = options;
 
     const v = {
@@ -40,13 +44,11 @@ function generateProtectedScript(originalScript, options = {}) {
         key: randomVar('_KY')
     };
 
-    // Encrypt script jika ada session key
     let scriptData;
     if (sessionKey) {
         const encrypted = xorEncrypt(originalScript, sessionKey);
         scriptData = `{${encrypted.join(',')}}`;
     } else {
-        // Fallback ke base64 chunks
         const chunks = [];
         const chunkSize = 400;
         for (let i = 0; i < originalScript.length; i += chunkSize) {
@@ -61,10 +63,6 @@ function generateProtectedScript(originalScript, options = {}) {
     const allowedGamesStr = allowedPlaceIds.join(', ');
 
     const protectionWrapper = `
--- ============================================================
--- OWNER PROTECTION v5.0 - SECURE
--- ============================================================
-
 local _OWNER_IDS = {${ownerStr}}
 local _PLAYERS = game:GetService("Players")
 local _LOCAL = _PLAYERS.LocalPlayer
@@ -137,7 +135,6 @@ local function _SHUTDOWN()
     end)
 end
 
--- Global cleanup function
 _G._SCRIPT_CLEANUP = _SHUTDOWN
 
 local function _TRACK(gui)
@@ -197,7 +194,7 @@ _G._OWNER_PROTECTION = {
 
     const useEncryption = !!sessionKey;
 
-    const protectedScript = `-- Protected v5.0 - Secure
+    const protectedScript = `-- Protected v5.1
 local ${v.main} = (function()
     local Players = game:GetService("Players")
     local HttpService = game:GetService("HttpService")
@@ -214,7 +211,6 @@ local ${v.main} = (function()
     
     local ${v.data} = ${scriptData}
     
-    -- Game check
     local function ${v.game}()
         if #ALLOWED_GAMES == 0 then return true end
         for _, placeId in ipairs(ALLOWED_GAMES) do
@@ -352,7 +348,6 @@ local ${v.main} = (function()
         return found
     end
     
-    -- XOR Decrypt
     local function xorDecrypt(data, key)
         local result = {}
         for i = 1, #data do
@@ -363,7 +358,6 @@ local ${v.main} = (function()
         return table.concat(result)
     end
     
-    -- Base64 Decode (fallback)
     local function base64Decode(data)
         local b = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
         data = data:gsub('[^'..b..'=]', '')
@@ -386,10 +380,8 @@ local ${v.main} = (function()
     
     local function ${v.decode}()
         if USE_ENCRYPTION and SESSION_KEY ~= "" then
-            -- XOR decrypt
             return xorDecrypt(${v.data}, SESSION_KEY)
         else
-            -- Base64 decode chunks
             local parts = {}
             for i, chunk in ipairs(${v.data}) do
                 parts[i] = base64Decode(chunk)
