@@ -1,6 +1,6 @@
 // ============================================================
-// 🛡️ PREMIUM LOADER v5.0.0 - SECURE EDITION
-// With 2-Step Verification & Roblox API Validation
+// 🛡️ PREMIUM LOADER v5.0.0 - COMPATIBLE VERSION
+// Menggunakan /script endpoint seperti versi lama
 // ============================================================
 
 const express = require('express');
@@ -11,30 +11,13 @@ const rateLimit = require('express-rate-limit');
 const crypto = require('crypto');
 
 const config = require('./config');
-const { db, scriptCache, blockedDevices } = require('./database');
-const { generateProtectedScript } = require('./protection');
+const { db, scriptCache, blockedDevices, challenges } = require('./database');
+const { generateProtectedScript, generateSessionKey } = require('./protection');
 
 const app = express();
 
 // ============================================================
-// 🔐 CHALLENGE STORE (In-Memory, gunakan Redis untuk production)
-// ============================================================
-
-const challengeStore = new Map();
-const CHALLENGE_EXPIRY = 30000; // 30 detik
-
-// Cleanup expired challenges
-setInterval(() => {
-    const now = Date.now();
-    for (const [id, data] of challengeStore.entries()) {
-        if (now - data.createdAt > CHALLENGE_EXPIRY) {
-            challengeStore.delete(id);
-        }
-    }
-}, 10000);
-
-// ============================================================
-// 🌐 UNAUTHORIZED HTML (tetap sama)
+// 🌐 UNAUTHORIZED HTML
 // ============================================================
 
 const UNAUTHORIZED_HTML = `<!DOCTYPE html>
@@ -42,99 +25,46 @@ const UNAUTHORIZED_HTML = `<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Unauthorized | Premium Protect</title>
+    <title>Unauthorized</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body, html {
-            width: 100%; height: 100%; overflow: hidden;
-            background-color: #000000;
-            font-family: 'Inter', -apple-system, sans-serif;
-            color: #ffffff;
+        body { 
+            background: #000; color: #fff; font-family: system-ui;
+            height: 100vh; display: flex; align-items: center; 
+            justify-content: center; text-align: center;
         }
-        .bg-layer {
-            position: fixed;
-            top: 0; left: 0; width: 100%; height: 100%;
-            background: linear-gradient(270deg, #000000, #0f172a, #000000);
-            background-size: 600% 600%;
-            animation: gradientShift 30s ease infinite;
-            z-index: 1;
-        }
-        .container {
-            position: relative; z-index: 10; height: 100vh;
-            display: flex; flex-direction: column;
-            justify-content: center; align-items: center;
-            text-align: center; padding: 20px; user-select: none;
-        }
-        .auth-label {
-            display: flex; align-items: center; gap: 12px;
-            color: #ffffff; font-size: 1.1rem; font-weight: 600;
-            letter-spacing: 3px; text-transform: uppercase;
-            margin-bottom: 25px;
-        }
-        h1 {
-            color: #ffffff;
-            font-size: clamp(1.8rem, 5vw, 2.5rem);
-            font-weight: 800; max-width: 700px;
-            margin: 0 0 20px 0; line-height: 1.3;
-            background: linear-gradient(180deg, #ffffff 40%, #94a3b8 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-        p { color: rgba(255, 255, 255, 0.4); font-size: 1.1rem; margin: 0; }
-        .icon { font-size: 1.4rem; }
-        @keyframes gradientShift {
-            0% { background-position: 0% 50%; }
-            50% { background-position: 100% 50%; }
-            100% { background-position: 0% 50%; }
-        }
+        h1 { font-size: 2rem; margin-bottom: 1rem; }
+        p { color: #666; }
     </style>
 </head>
 <body>
-    <div class="bg-layer"></div>
-    <div class="container">
-        <div class="auth-label">
-            <span class="icon">⛔</span>
-            Not Authorized
-            <span class="icon">⛔</span>
-        </div>
-        <h1>You are not allowed to view these files.</h1>
-        <p>Close this page & proceed.</p>
+    <div>
+        <h1>⛔ Not Authorized</h1>
+        <p>You are not allowed to view this.</p>
     </div>
 </body>
 </html>`;
 
 // ============================================================
-// 🔧 MIDDLEWARE (tetap sama + tambahan)
+// 🔧 MIDDLEWARE
 // ============================================================
 
-app.use(helmet({ 
-    contentSecurityPolicy: false, 
-    crossOriginEmbedderPolicy: false 
-}));
-
-app.use(cors({ 
-    origin: '*', 
-    methods: ['GET', 'POST', 'DELETE', 'PUT'], 
-    allowedHeaders: ['Content-Type', 'x-admin-key', 'Authorization'] 
-}));
-
+app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
+app.use(cors({ origin: '*', methods: ['GET', 'POST', 'DELETE', 'PUT'] }));
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.set('trust proxy', 1);
 
-// Rate limiter lebih ketat untuk auth endpoints
 const authLimiter = rateLimit({
     windowMs: 60 * 1000,
-    max: 10, // Hanya 10 request per menit untuk auth
-    message: { success: false, error: "Too many attempts" },
-    keyGenerator: (req) => getClientIP(req)
+    max: 20,
+    message: { success: false, error: "Too many attempts" }
 });
 
 const generalLimiter = rateLimit({
     windowMs: 60 * 1000,
-    max: 60,
-    message: { success: false, error: "Too many requests" },
-    keyGenerator: (req) => getClientIP(req)
+    max: 100,
+    message: { success: false, error: "Too many requests" }
 });
 
 app.use('/api/auth/', authLimiter);
@@ -147,56 +77,47 @@ app.use('/api/', generalLimiter);
 function getClientIP(req) {
     return req.headers['x-forwarded-for']?.split(',')[0]?.trim() || 
            req.headers['x-real-ip'] || 
-           req.connection?.remoteAddress || 
-           req.ip || 
-           'unknown';
+           req.ip || 'unknown';
+}
+
+function getHWID(req) {
+    return req.headers['x-hwid'] || req.query.hwid || null;
+}
+
+function getPlayerID(req) {
+    return req.headers['x-player-id'] || req.query.pid || null;
 }
 
 function logAccess(req, action, success, details = {}) {
     const log = { 
         ip: getClientIP(req), 
-        userAgent: req.headers['user-agent'] || 'unknown', 
+        hwid: getHWID(req),
+        playerId: getPlayerID(req),
         action, 
         success, 
-        method: req.method, 
-        path: req.path,
         timestamp: new Date().toISOString(),
         ...details 
     };
     db.addLog(log);
-    console.log(`[${log.timestamp}] ${success ? '✅' : '❌'} ${action} | IP: ${log.ip}`);
-    return log;
+    console.log(`[${log.timestamp}] ${success ? '✅' : '❌'} ${action}`);
 }
 
 function isBrowser(req) {
     const accept = req.headers['accept'] || '';
-    const userAgent = (req.headers['user-agent'] || '').toLowerCase();
+    const ua = (req.headers['user-agent'] || '').toLowerCase();
     
-    const executorKeywords = [
-        'roblox', 'synapse', 'krnl', 'fluxus', 'delta', 
-        'electron', 'script-ware', 'sentinel', 'coco', 
-        'oxygen', 'evon', 'arceus', 'hydrogen', 'vegax',
-        'trigon', 'comet', 'jjsploit', 'wearedevs', 
-        'executor', 'exploit', 'wininet', 'solara', 'wave',
-        'zorara', 'codex', 'nihon', 'celery', 'swift'
-    ];
+    const executors = ['synapse', 'krnl', 'fluxus', 'delta', 'script-ware', 
+                       'sentinel', 'oxygen', 'evon', 'arceus', 'hydrogen',
+                       'solara', 'wave', 'zorara', 'codex', 'celery', 'swift',
+                       'executor', 'exploit', 'roblox', 'wininet'];
     
-    if (executorKeywords.some(keyword => userAgent.includes(keyword))) {
-        return false;
-    }
+    if (executors.some(e => ua.includes(e))) return false;
     
     if (accept.includes('text/html')) {
-        const hasBrowserUA = userAgent.includes('mozilla') || 
-                             userAgent.includes('chrome') || 
-                             userAgent.includes('safari') ||
-                             userAgent.includes('firefox') ||
-                             userAgent.includes('edge');
-        
-        if (hasBrowserUA && !!req.headers['accept-language']) {
-            return true;
-        }
+        const hasBrowserUA = ua.includes('mozilla') || ua.includes('chrome') || 
+                             ua.includes('safari') || ua.includes('firefox');
+        if (hasBrowserUA && req.headers['accept-language']) return true;
     }
-    
     return false;
 }
 
@@ -211,95 +132,27 @@ function secureCompare(a, b) {
 }
 
 // ============================================================
-// 🔐 CRYPTO FUNCTIONS
+// 🏠 ROOT & HEALTH
 // ============================================================
 
-function generateChallenge() {
-    const id = crypto.randomBytes(16).toString('hex');
-    const numbers = [];
-    for (let i = 0; i < 4; i++) {
-        numbers.push(crypto.randomInt(1, 100));
+app.get('/', (req, res) => {
+    if (isBrowser(req)) {
+        return res.status(403).type('text/html').send(UNAUTHORIZED_HTML);
     }
-    const expectedSum = numbers.reduce((a, b) => a + b, 0);
-    
-    return {
-        id,
-        puzzle: { numbers, operation: 'sum' },
-        solution: expectedSum,
-        createdAt: Date.now()
-    };
-}
+    res.json({ status: "online", version: "5.0.0" });
+});
 
-function xorEncrypt(text, key) {
-    const result = [];
-    for (let i = 0; i < text.length; i++) {
-        const charCode = text.charCodeAt(i) ^ key.charCodeAt(i % key.length);
-        result.push(charCode);
-    }
-    return result;
-}
-
-function generateSessionKey(userId, hwid, timestamp) {
-    const data = `${userId}-${hwid}-${timestamp}-${config.SECRET_KEY || 'default'}`;
-    return crypto.createHash('sha256').update(data).digest('hex').substring(0, 32);
-}
+app.get('/health', (req, res) => {
+    res.json({ status: "ok", timestamp: new Date().toISOString() });
+});
 
 // ============================================================
-// 🔍 ROBLOX API VERIFICATION (PENTING!)
-// ============================================================
-
-async function verifyRobloxUser(userId) {
-    try {
-        const response = await axios.get(
-            `https://users.roblox.com/v1/users/${userId}`,
-            { timeout: 5000 }
-        );
-        
-        if (response.data && response.data.id) {
-            return {
-                valid: true,
-                username: response.data.name,
-                displayName: response.data.displayName,
-                id: response.data.id
-            };
-        }
-        return { valid: false };
-    } catch (error) {
-        console.warn(`⚠️ Roblox API check failed for ${userId}:`, error.message);
-        // Jika API down, fallback ke allow (optional, bisa di-deny)
-        return { valid: true, fallback: true };
-    }
-}
-
-async function verifyUserInGame(userId, placeId) {
-    try {
-        // Check user's current game (jika memungkinkan)
-        // Roblox API terbatas untuk ini, tapi bisa cek presence
-        const response = await axios.post(
-            'https://presence.roblox.com/v1/presence/users',
-            { userIds: [userId] },
-            { timeout: 5000 }
-        );
-        
-        if (response.data && response.data.userPresences) {
-            const presence = response.data.userPresences[0];
-            if (presence && presence.placeId === placeId) {
-                return { valid: true, inGame: true };
-            }
-        }
-        
-        // Presence check gagal, tapi user mungkin tetap valid
-        return { valid: true, inGame: false };
-    } catch (error) {
-        return { valid: true, inGame: false }; // Fallback
-    }
-}
-
-// ============================================================
-// 🚀 STEP 1: REQUEST CHALLENGE
+// 🔐 AUTH ENDPOINTS (NEW - 2-Step Verification)
 // ============================================================
 
 app.post('/api/auth/challenge', async (req, res) => {
+    console.log('📥 [CHALLENGE] Request received');
+    
     if (isBrowser(req)) {
         return res.status(403).json({ success: false, error: "Forbidden" });
     }
@@ -307,121 +160,57 @@ app.post('/api/auth/challenge', async (req, res) => {
     try {
         const { userId, hwid, placeId } = req.body;
         
-        // Validasi input
         if (!userId || !hwid || !placeId) {
-            logAccess(req, 'CHALLENGE_INVALID_INPUT', false);
-            return res.status(400).json({ 
-                success: false, 
-                error: "Missing required fields" 
-            });
+            return res.status(400).json({ success: false, error: "Missing fields" });
         }
 
         const userIdNum = parseInt(userId);
         const placeIdNum = parseInt(placeId);
-        
-        if (isNaN(userIdNum) || isNaN(placeIdNum)) {
-            return res.status(400).json({ 
-                success: false, 
-                error: "Invalid ID format" 
-            });
-        }
 
-        // Cek blocked
-        if (blockedDevices.isBlocked(hwid, getClientIP(req), userIdNum)) {
+        // Check blocked
+        const blockInfo = blockedDevices.isBlocked(hwid, getClientIP(req), userIdNum);
+        if (blockInfo.blocked) {
             logAccess(req, 'CHALLENGE_BLOCKED', false, { userId: userIdNum });
-            return res.status(403).json({ 
-                success: false, 
-                error: "Access denied" 
-            });
+            return res.status(403).json({ success: false, error: "Access denied" });
         }
 
-        // ✅ VERIFIKASI ROBLOX USER (PENTING!)
-        const robloxUser = await verifyRobloxUser(userIdNum);
-        if (!robloxUser.valid) {
-            logAccess(req, 'CHALLENGE_INVALID_USER', false, { userId: userIdNum });
-            return res.status(403).json({ 
-                success: false, 
-                error: "Invalid user" 
-            });
+        // Check whitelist
+        if (config.WHITELIST_USER_IDS.length > 0) {
+            if (!config.WHITELIST_USER_IDS.includes(userIdNum)) {
+                logAccess(req, 'CHALLENGE_NOT_WHITELISTED', false, { userId: userIdNum });
+                return res.status(403).json({ success: false, error: "Not whitelisted" });
+            }
         }
 
-        // Cek whitelist
-        const whitelistEnv = process.env.WHITELIST_USER_IDS || '';
-        const whitelistUserIds = whitelistEnv
-            .split(',')
-            .map(id => parseInt(id.trim()))
-            .filter(id => !isNaN(id));
-        
-        const isWhitelisted = whitelistUserIds.includes(userIdNum);
-        
-        if (!isWhitelisted && whitelistUserIds.length > 0) {
-            logAccess(req, 'CHALLENGE_NOT_WHITELISTED', false, { 
-                userId: userIdNum,
-                username: robloxUser.username 
-            });
-            return res.status(403).json({ 
-                success: false, 
-                error: "Not whitelisted" 
-            });
+        // Check allowed games
+        if (config.ALLOWED_PLACE_IDS.length > 0) {
+            if (!config.ALLOWED_PLACE_IDS.includes(placeIdNum)) {
+                logAccess(req, 'CHALLENGE_WRONG_GAME', false, { placeId: placeIdNum });
+                return res.status(403).json({ success: false, error: "Game not allowed" });
+            }
         }
 
-        // Cek allowed games
-        const allowedGamesEnv = process.env.ALLOWED_PLACE_IDS || '';
-        const allowedGames = allowedGamesEnv
-            .split(',')
-            .map(id => parseInt(id.trim()))
-            .filter(id => !isNaN(id));
+        // Create challenge
+        const challenge = challenges.create(userIdNum, hwid, placeIdNum, getClientIP(req));
         
-        if (allowedGames.length > 0 && !allowedGames.includes(placeIdNum)) {
-            logAccess(req, 'CHALLENGE_WRONG_GAME', false, { 
-                userId: userIdNum,
-                placeId: placeIdNum 
-            });
-            return res.status(403).json({ 
-                success: false, 
-                error: "Game not allowed" 
-            });
-        }
+        logAccess(req, 'CHALLENGE_ISSUED', true, { userId: userIdNum });
 
-        // Generate challenge
-        const challenge = generateChallenge();
-        
-        // Store dengan metadata
-        challengeStore.set(challenge.id, {
-            ...challenge,
-            userId: userIdNum,
-            hwid,
-            placeId: placeIdNum,
-            ip: getClientIP(req),
-            username: robloxUser.username
-        });
-
-        logAccess(req, 'CHALLENGE_ISSUED', true, { 
-            challengeId: challenge.id,
-            userId: userIdNum,
-            username: robloxUser.username
-        });
-
-        // Kirim puzzle (BUKAN solusi!)
         res.json({
             success: true,
             challengeId: challenge.id,
             puzzle: challenge.puzzle,
-            expiresIn: 30
+            expiresIn: 60
         });
 
     } catch (error) {
         console.error('Challenge error:', error);
-        logAccess(req, 'CHALLENGE_ERROR', false, { error: error.message });
         res.status(500).json({ success: false, error: "Server error" });
     }
 });
 
-// ============================================================
-// 🚀 STEP 2: VERIFY & GET SCRIPT
-// ============================================================
-
 app.post('/api/auth/verify', async (req, res) => {
+    console.log('📥 [VERIFY] Request received');
+    
     if (isBrowser(req)) {
         return res.status(403).json({ success: false, error: "Forbidden" });
     }
@@ -430,70 +219,26 @@ app.post('/api/auth/verify', async (req, res) => {
         const { challengeId, solution, timestamp } = req.body;
         
         if (!challengeId || solution === undefined || !timestamp) {
-            return res.status(400).json({ 
-                success: false, 
-                error: "Missing fields" 
-            });
+            return res.status(400).json({ success: false, error: "Missing fields" });
         }
 
-        // Ambil challenge
-        const challenge = challengeStore.get(challengeId);
+        // Verify challenge
+        const result = challenges.verify(challengeId, solution, getClientIP(req));
         
-        if (!challenge) {
-            logAccess(req, 'VERIFY_INVALID_CHALLENGE', false);
-            return res.status(400).json({ 
-                success: false, 
-                error: "Invalid or expired challenge" 
-            });
+        if (!result.valid) {
+            logAccess(req, 'VERIFY_FAILED', false, { error: result.error });
+            return res.status(403).json({ success: false, error: result.error });
         }
 
-        // Cek expiry
-        if (Date.now() - challenge.createdAt > CHALLENGE_EXPIRY) {
-            challengeStore.delete(challengeId);
-            logAccess(req, 'VERIFY_EXPIRED', false);
-            return res.status(400).json({ 
-                success: false, 
-                error: "Challenge expired" 
-            });
-        }
+        const challenge = result.challenge;
+        console.log(`✅ [VERIFY] User ${challenge.userId} verified`);
 
-        // Cek IP sama
-        if (challenge.ip !== getClientIP(req)) {
-            challengeStore.delete(challengeId);
-            logAccess(req, 'VERIFY_IP_MISMATCH', false);
-            return res.status(403).json({ 
-                success: false, 
-                error: "IP mismatch" 
-            });
-        }
-
-        // Verify solution
-        if (parseInt(solution) !== challenge.solution) {
-            challengeStore.delete(challengeId);
-            logAccess(req, 'VERIFY_WRONG_SOLUTION', false, { 
-                userId: challenge.userId 
-            });
-            return res.status(403).json({ 
-                success: false, 
-                error: "Invalid solution" 
-            });
-        }
-
-        // Hapus challenge (one-time use)
-        challengeStore.delete(challengeId);
-
-        // ✅ Semua valid! Siapkan script
-        console.log(`✅ [VERIFIED] User: ${challenge.username} (${challenge.userId})`);
-
-        // Ambil script
+        // Get script
         let script = scriptCache.get('main_script');
         
         if (!script) {
             if (!config.SCRIPT_SOURCE_URL) {
-                return res.status(500).json({ 
-                    success: false, 
-                    error: "Server not configured" 
-                });
+                return res.status(500).json({ success: false, error: "Server not configured" });
             }
 
             try {
@@ -504,10 +249,8 @@ app.post('/api/auth/verify', async (req, res) => {
                 script = response.data;
                 scriptCache.set('main_script', script);
             } catch (fetchError) {
-                return res.status(500).json({ 
-                    success: false, 
-                    error: "Failed to fetch script" 
-                });
+                console.error('Fetch error:', fetchError.message);
+                return res.status(500).json({ success: false, error: "Failed to fetch script" });
             }
         }
 
@@ -515,75 +258,54 @@ app.post('/api/auth/verify', async (req, res) => {
         const sessionKey = generateSessionKey(
             challenge.userId, 
             challenge.hwid, 
-            timestamp
+            timestamp, 
+            config.SECRET_KEY
         );
 
         // Encrypt script
-        const encryptedChunks = [];
-        const chunkSize = 1000;
+        const chunks = [];
+        const chunkSize = 2000;
         
         for (let i = 0; i < script.length; i += chunkSize) {
             const chunk = script.substring(i, i + chunkSize);
-            const encrypted = xorEncrypt(chunk, sessionKey);
-            encryptedChunks.push(encrypted);
+            const encrypted = [];
+            for (let j = 0; j < chunk.length; j++) {
+                encrypted.push(chunk.charCodeAt(j) ^ sessionKey.charCodeAt(j % sessionKey.length));
+            }
+            chunks.push(encrypted);
         }
 
-        // Generate checksum
-        const checksum = crypto
-            .createHash('md5')
-            .update(script)
-            .digest('hex');
+        const serverUrl = process.env.RENDER_EXTERNAL_URL || `${req.protocol}://${req.get('host')}`;
 
-        const serverUrl = process.env.RENDER_EXTERNAL_URL || 
-                          `${req.protocol}://${req.get('host')}`;
-
-        // Parse owner IDs
-        const ownerEnv = process.env.OWNER_USER_IDS || '';
-        const ownerUserIds = ownerEnv
-            .split(',')
-            .map(id => parseInt(id.trim()))
-            .filter(id => !isNaN(id));
-
-        logAccess(req, 'SCRIPT_SERVED', true, { 
-            userId: challenge.userId,
-            username: challenge.username,
-            placeId: challenge.placeId
-        });
+        logAccess(req, 'SCRIPT_SERVED_SECURE', true, { userId: challenge.userId });
 
         res.json({
             success: true,
             key: sessionKey,
-            chunks: encryptedChunks,
-            checksum,
-            ownerIds: ownerUserIds,
-            banEndpoint: `${serverUrl}/api/ban`,
-            meta: {
-                userId: challenge.userId,
-                username: challenge.username,
-                expiresAt: Date.now() + (24 * 60 * 60 * 1000) // 24 jam
-            }
+            chunks: chunks,
+            ownerIds: config.OWNER_USER_IDS,
+            banEndpoint: `${serverUrl}/api/ban`
         });
 
     } catch (error) {
         console.error('Verify error:', error);
-        logAccess(req, 'VERIFY_ERROR', false, { error: error.message });
         res.status(500).json({ success: false, error: "Server error" });
     }
 });
 
 // ============================================================
-// 🚀 LOADER SCRIPT (untuk di-loadstring user)
+// 📜 LOADER ENDPOINT (untuk 2-step auth)
 // ============================================================
 
 app.get('/loader', (req, res) => {
+    console.log('📥 [LOADER] Request received');
+    
     if (isBrowser(req)) {
         return res.status(403).type('text/html').send(UNAUTHORIZED_HTML);
     }
 
-    const serverUrl = process.env.RENDER_EXTERNAL_URL || 
-                      `${req.protocol}://${req.get('host')}`;
+    const serverUrl = process.env.RENDER_EXTERNAL_URL || `${req.protocol}://${req.get('host')}`;
 
-    // Ini adalah loader yang akan di-loadstring user
     const loaderScript = `--[[ Secure Loader v5.0 ]]
 local SERVER = "${serverUrl}"
 local HttpService = game:GetService("HttpService")
@@ -591,166 +313,118 @@ local Players = game:GetService("Players")
 local StarterGui = game:GetService("StarterGui")
 local LocalPlayer = Players.LocalPlayer
 
--- Notify
 local function notify(title, text, duration)
     pcall(function()
         StarterGui:SetCore("SendNotification", {
-            Title = title,
-            Text = text,
-            Duration = duration or 3
+            Title = title, Text = text, Duration = duration or 3
         })
     end)
 end
 
--- Get HWID
 local function getHWID()
     local ok, result = pcall(function()
         if gethwid then return gethwid() end
         if get_hwid then return get_hwid() end
-        if getexecutorname then
-            return getexecutorname() .. "_" .. tostring(LocalPlayer.UserId)
-        end
-        return "FALLBACK_" .. tostring(LocalPlayer.UserId) .. "_" .. tostring(os.time())
+        return "FALLBACK_" .. tostring(LocalPlayer.UserId)
     end)
-    return ok and result or "ERROR"
+    return ok and result or "UNKNOWN"
 end
 
--- HTTP Request
-local function httpRequest(url, method, body)
-    local req = syn and syn.request or request or http_request or http.request
-    if not req then return nil, "No HTTP" end
+local function httpPost(url, data)
+    local req = (syn and syn.request) or request or http_request
+    if not req then return nil end
     
-    local ok, result = pcall(function()
+    local ok, response = pcall(function()
         return req({
-            Url = url,
-            Method = method or "GET",
+            Url = url, Method = "POST",
             Headers = { ["Content-Type"] = "application/json" },
-            Body = body and HttpService:JSONEncode(body) or nil
+            Body = HttpService:JSONEncode(data)
         })
     end)
     
-    if ok and result then
-        local parseOk, data = pcall(function()
-            return HttpService:JSONDecode(result.Body)
-        end)
-        return parseOk and data or nil, result.StatusCode
-    end
-    return nil, "Request failed"
+    if not ok or response.StatusCode ~= 200 then return nil end
+    
+    local parseOk, parsed = pcall(function()
+        return HttpService:JSONDecode(response.Body)
+    end)
+    
+    return parseOk and parsed or nil
 end
 
--- XOR Decrypt
 local function xorDecrypt(data, key)
     local result = {}
     for i = 1, #data do
-        local byte = data[i]
-        local keyByte = string.byte(key, ((i - 1) % #key) + 1)
-        result[i] = string.char(bit32.bxor(byte, keyByte))
+        result[i] = string.char(bit32.bxor(data[i], string.byte(key, ((i-1) % #key) + 1)))
     end
     return table.concat(result)
 end
 
--- Main
 local function main()
-    notify("🔄 Loading", "Requesting access...", 2)
+    notify("🔄 Loading", "Connecting...", 2)
     
-    -- Step 1: Get challenge
-    local challengeData, err1 = httpRequest(
-        SERVER .. "/api/auth/challenge",
-        "POST",
-        {
-            userId = LocalPlayer.UserId,
-            hwid = getHWID(),
-            placeId = game.PlaceId
-        }
-    )
+    local challengeData = httpPost(SERVER .. "/api/auth/challenge", {
+        userId = LocalPlayer.UserId,
+        hwid = getHWID(),
+        placeId = game.PlaceId
+    })
     
     if not challengeData or not challengeData.success then
-        local errorMsg = challengeData and challengeData.error or "Connection failed"
-        notify("❌ Error", errorMsg, 5)
-        
-        if errorMsg == "Not whitelisted" or errorMsg == "Access denied" then
+        notify("❌ Error", challengeData and challengeData.error or "Connection failed", 5)
+        if challengeData and challengeData.error == "Not whitelisted" then
             task.wait(1)
-            LocalPlayer:Kick("⛔ Access Denied\\n\\n" .. errorMsg)
+            LocalPlayer:Kick("⛔ Not Whitelisted")
         end
-        return false
+        return
     end
     
-    -- Step 2: Solve puzzle
-    local puzzle = challengeData.puzzle
     local solution = 0
-    
-    if puzzle.operation == "sum" then
-        for _, num in ipairs(puzzle.numbers) do
-            solution = solution + num
-        end
+    for _, num in ipairs(challengeData.puzzle.numbers) do
+        solution = solution + num
     end
     
     notify("🔄 Loading", "Verifying...", 2)
     
-    -- Step 3: Verify & get script
-    local verifyData, err2 = httpRequest(
-        SERVER .. "/api/auth/verify",
-        "POST",
-        {
-            challengeId = challengeData.challengeId,
-            solution = solution,
-            timestamp = os.time()
-        }
-    )
+    local verifyData = httpPost(SERVER .. "/api/auth/verify", {
+        challengeId = challengeData.challengeId,
+        solution = solution,
+        timestamp = os.time()
+    })
     
     if not verifyData or not verifyData.success then
-        notify("❌ Error", verifyData and verifyData.error or "Verification failed", 5)
-        return false
+        notify("❌ Error", "Verification failed", 5)
+        return
     end
     
-    -- Step 4: Decrypt script
     notify("✅ Verified", "Loading script...", 2)
     
-    local decryptedParts = {}
+    local parts = {}
     for i, chunk in ipairs(verifyData.chunks) do
-        local decrypted = xorDecrypt(chunk, verifyData.key)
-        decryptedParts[i] = decrypted
+        parts[i] = xorDecrypt(chunk, verifyData.key)
     end
     
-    local fullScript = table.concat(decryptedParts)
+    local fullScript = table.concat(parts)
     
-    -- Step 5: Verify checksum (optional)
-    -- Note: MD5 di Lua butuh library external, skip untuk simplicity
-    
-    -- Step 6: Setup owner protection
     local OWNER_IDS = verifyData.ownerIds or {}
-    
-    task.spawn(function()
-        while task.wait(10) do
-            for _, p in pairs(Players:GetPlayers()) do
-                for _, ownerId in ipairs(OWNER_IDS) do
-                    if p.UserId == ownerId and p ~= LocalPlayer then
-                        if _G._SCRIPT_CLEANUP then
-                            pcall(_G._SCRIPT_CLEANUP)
+    if #OWNER_IDS > 0 then
+        task.spawn(function()
+            while task.wait(15) do
+                for _, p in pairs(Players:GetPlayers()) do
+                    for _, oid in ipairs(OWNER_IDS) do
+                        if p.UserId == oid and p ~= LocalPlayer then
+                            if _G._SCRIPT_CLEANUP then pcall(_G._SCRIPT_CLEANUP) end
+                            notify("⚠️ Stopped", "Owner detected", 3)
+                            return
                         end
-                        notify("⚠️ Stopping", "Owner detected", 3)
-                        return
                     end
                 end
             end
-        end
-    end)
-    
-    -- Step 7: Execute
-    local fn, err = loadstring(fullScript)
-    if fn then
-        local ok, execErr = pcall(fn)
-        if not ok then
-            warn("Execution error:", execErr)
-        end
-        return ok
-    else
-        warn("Loadstring error:", err)
-        return false
+        end)
     end
+    
+    local fn = loadstring(fullScript)
+    if fn then pcall(fn) end
 end
 
--- Run
 main()
 `;
 
@@ -759,7 +433,100 @@ main()
 });
 
 // ============================================================
-// 🚫 BAN ENDPOINT (tetap sama)
+// 📜 LEGACY /script ENDPOINT (Kompatibel dengan kode lama)
+// ============================================================
+
+app.get('/script', async (req, res) => {
+    console.log('📥 [SCRIPT] Request received (legacy endpoint)');
+    
+    if (isBrowser(req)) {
+        logAccess(req, 'BROWSER_BLOCKED', false);
+        return res.status(403).type('text/html').send(UNAUTHORIZED_HTML);
+    }
+
+    const playerIdHeader = getPlayerID(req);
+    const hwidHeader = getHWID(req);
+    
+    // Check whitelist
+    let isWhitelisted = false;
+    if (playerIdHeader && config.WHITELIST_USER_IDS.length > 0) {
+        isWhitelisted = config.WHITELIST_USER_IDS.includes(parseInt(playerIdHeader));
+    } else if (config.WHITELIST_USER_IDS.length === 0) {
+        isWhitelisted = true; // No whitelist = allow all
+    }
+
+    // Check blocked
+    if (!isWhitelisted) {
+        const blockInfo = blockedDevices.isBlocked(hwidHeader, getClientIP(req), playerIdHeader);
+        if (blockInfo.blocked) {
+            logAccess(req, 'BLOCKED_DEVICE', false);
+            return res.type('text/plain').send(`
+game:GetService("Players").LocalPlayer:Kick("⛔ BANNED\\n\\nReason: ${blockInfo.reason}")
+`);
+        }
+    }
+
+    try {
+        let script = scriptCache.get('main_script');
+        
+        if (!script) {
+            if (!config.SCRIPT_SOURCE_URL) {
+                console.error('❌ SCRIPT_SOURCE_URL not set!');
+                return res.type('text/plain').send(`
+game:GetService("StarterGui"):SetCore("SendNotification", {
+    Title = "⚠️ Error", Text = "Server not configured", Duration = 5
+})
+`);
+            }
+            
+            console.log(`🔄 Fetching script...`);
+            const response = await axios.get(config.SCRIPT_SOURCE_URL, {
+                timeout: 15000,
+                headers: { 'User-Agent': 'Roblox/WinInet' }
+            });
+            
+            script = response.data;
+            scriptCache.set('main_script', script);
+            console.log(`✅ Script cached (${script.length} bytes)`);
+        }
+
+        const serverUrl = process.env.RENDER_EXTERNAL_URL || `${req.protocol}://${req.get('host')}`;
+        const timestamp = Date.now();
+        
+        // Generate session key jika ada HWID
+        let sessionKey = null;
+        if (hwidHeader && playerIdHeader) {
+            sessionKey = generateSessionKey(playerIdHeader, hwidHeader, timestamp, config.SECRET_KEY);
+        }
+
+        const protectedScript = generateProtectedScript(script, {
+            banEndpoint: `${serverUrl}/api/ban`,
+            whitelistUserIds: config.WHITELIST_USER_IDS,
+            ownerUserIds: config.OWNER_USER_IDS,
+            allowedPlaceIds: config.ALLOWED_PLACE_IDS,
+            sessionKey: sessionKey
+        });
+
+        logAccess(req, 'SCRIPT_SERVED', true, { 
+            size: protectedScript.length,
+            encrypted: !!sessionKey
+        });
+        
+        res.type('text/plain').send(protectedScript);
+
+    } catch (error) {
+        console.error('Script error:', error.message);
+        logAccess(req, 'SCRIPT_ERROR', false, { error: error.message });
+        res.type('text/plain').send(`
+game:GetService("StarterGui"):SetCore("SendNotification", {
+    Title = "❌ Error", Text = "Failed to load", Duration = 5
+})
+`);
+    }
+});
+
+// ============================================================
+// 🚫 BAN ENDPOINT
 // ============================================================
 
 app.post('/api/ban', (req, res) => {
@@ -773,75 +540,38 @@ app.post('/api/ban', (req, res) => {
         const banId = crypto.randomBytes(8).toString('hex').toUpperCase();
         
         blockedDevices.addBlock({
-            hwid,
-            ip: ip || getClientIP(req),
-            playerId,
-            playerName,
-            reason: reason || 'Malicious tools detected',
-            toolsDetected: toolsDetected || [],
-            banId,
-            timestamp: new Date().toISOString()
+            hwid, ip: ip || getClientIP(req), playerId, playerName,
+            reason: reason || 'Banned', toolsDetected: toolsDetected || [],
+            banId, timestamp: new Date().toISOString()
         });
         
-        logAccess(req, 'DEVICE_BANNED', true, { hwid, playerId, playerName, reason, banId });
-        console.log(`🔨 [BAN] Player: ${playerName} | Reason: ${reason}`);
+        console.log(`🔨 [BAN] ${playerName || playerId} - ${reason}`);
+        logAccess(req, 'BANNED', true, { playerId, reason, banId });
         
         res.json({ success: true, banId });
     } catch (error) {
-        console.error('Ban error:', error);
         res.status(500).json({ error: error.message });
     }
 });
 
 // ============================================================
-// 🌐 ROOT & HEALTH
-// ============================================================
-
-app.get('/', (req, res) => {
-    if (isBrowser(req)) {
-        return res.status(403).type('text/html').send(UNAUTHORIZED_HTML);
-    }
-    
-    res.json({
-        status: "online",
-        name: "Premium Loader",
-        version: "5.0.0",
-        secure: true
-    });
-});
-
-app.get('/health', (req, res) => {
-    res.json({ status: "ok", timestamp: new Date().toISOString() });
-});
-
-// ============================================================
-// 👑 ADMIN ROUTES (tetap sama)
+// 👑 ADMIN ROUTES
 // ============================================================
 
 function adminAuth(req, res, next) {
-    const adminKey = req.headers['x-admin-key'] || req.query.key;
-    
-    if (!adminKey || !secureCompare(adminKey, config.ADMIN_KEY)) {
-        logAccess(req, 'ADMIN_AUTH_FAILED', false);
-        return res.status(403).json({ error: "Invalid admin key" });
+    const key = req.headers['x-admin-key'] || req.query.key;
+    if (!key || !secureCompare(key, config.ADMIN_KEY)) {
+        return res.status(403).json({ error: "Unauthorized" });
     }
-    
     next();
 }
 
-app.post('/api/admin/cache/clear', adminAuth, (req, res) => {
-    scriptCache.flushAll();
-    logAccess(req, 'CACHE_CLEARED', true);
-    res.json({ success: true, message: "Cache cleared" });
+app.get('/api/admin/stats', adminAuth, (req, res) => {
+    res.json({ success: true, stats: db.getStats() });
 });
 
-app.get('/api/admin/stats', adminAuth, (req, res) => {
-    res.json({ 
-        success: true, 
-        stats: db.getStats(),
-        activeChallenges: challengeStore.size,
-        blockedDevices: blockedDevices.count()
-    });
+app.get('/api/admin/logs', adminAuth, (req, res) => {
+    res.json({ success: true, logs: db.getLogs(parseInt(req.query.limit) || 50) });
 });
 
 app.get('/api/admin/bans', adminAuth, (req, res) => {
@@ -849,42 +579,74 @@ app.get('/api/admin/bans', adminAuth, (req, res) => {
 });
 
 app.delete('/api/admin/bans/:banId', adminAuth, (req, res) => {
-    const removed = blockedDevices.removeByBanId(req.params.banId);
-    res.json({ success: removed });
+    res.json({ success: blockedDevices.removeByBanId(req.params.banId) });
+});
+
+app.post('/api/admin/cache/clear', adminAuth, (req, res) => {
+    scriptCache.flushAll();
+    res.json({ success: true });
+});
+
+app.post('/api/admin/bans/clear', adminAuth, (req, res) => {
+    blockedDevices.clearAll();
+    res.json({ success: true });
 });
 
 // ============================================================
-// 🚫 CATCH-ALL
+// 🔍 DEBUG
+// ============================================================
+
+app.get('/debug', (req, res) => {
+    res.json({
+        status: "ok",
+        config: {
+            hasScriptUrl: !!config.SCRIPT_SOURCE_URL,
+            whitelistCount: config.WHITELIST_USER_IDS.length,
+            ownerCount: config.OWNER_USER_IDS.length,
+            allowedGamesCount: config.ALLOWED_PLACE_IDS.length
+        },
+        cached: scriptCache.has('main_script'),
+        challenges: challenges.store.size,
+        blocked: blockedDevices.count()
+    });
+});
+
+// ============================================================
+// 🚫 404
 // ============================================================
 
 app.use('*', (req, res) => {
+    console.log(`⚠️ [404] ${req.method} ${req.originalUrl}`);
     if (isBrowser(req)) {
-        return res.status(403).type('text/html').send(UNAUTHORIZED_HTML);
+        return res.status(404).type('text/html').send(UNAUTHORIZED_HTML);
     }
-    res.status(404).json({ error: "Not found" });
+    res.status(404).json({ error: "Not found", path: req.originalUrl });
 });
 
 // ============================================================
-// 🚀 START SERVER
+// 🚀 START
 // ============================================================
 
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, '0.0.0.0', () => {
     console.log('');
-    console.log('╔══════════════════════════════════════════════════════════╗');
-    console.log('║      🛡️  PREMIUM LOADER v5.0.0 - SECURE EDITION         ║');
-    console.log('╠══════════════════════════════════════════════════════════╣');
-    console.log(`║  🌐 Port: ${PORT}                                            ║`);
-    console.log('║                                                          ║');
-    console.log('║  ✅ 2-Step Verification                                   ║');
-    console.log('║  ✅ Roblox API Validation                                 ║');
-    console.log('║  ✅ Challenge-Response System                             ║');
-    console.log('║  ✅ XOR Encryption                                        ║');
-    console.log('║  ✅ Session-based Keys                                    ║');
-    console.log('║  ✅ IP Verification                                       ║');
-    console.log('║                                                          ║');
-    console.log('╚══════════════════════════════════════════════════════════╝');
+    console.log('╔═══════════════════════════════════════════════════════╗');
+    console.log('║       🛡️  PREMIUM LOADER v5.0.0 - READY              ║');
+    console.log('╠═══════════════════════════════════════════════════════╣');
+    console.log(`║  🌐 Port: ${PORT}                                         ║`);
+    console.log('║                                                       ║');
+    console.log('║  📍 Endpoints:                                        ║');
+    console.log('║     GET  /script  → Legacy (kompatibel lama)          ║');
+    console.log('║     GET  /loader  → New secure loader                 ║');
+    console.log('║     POST /api/auth/challenge → 2-step auth            ║');
+    console.log('║     POST /api/auth/verify    → 2-step verify          ║');
+    console.log('║                                                       ║');
+    console.log(`║  ✅ SCRIPT_SOURCE_URL: ${config.SCRIPT_SOURCE_URL ? 'SET' : 'NOT SET!'}                      ║`);
+    console.log(`║  👥 Whitelist: ${config.WHITELIST_USER_IDS.length} users                            ║`);
+    console.log(`║  👑 Owners: ${config.OWNER_USER_IDS.length} users                               ║`);
+    console.log('║                                                       ║');
+    console.log('╚═══════════════════════════════════════════════════════╝');
     console.log('');
 });
 
