@@ -1,9 +1,16 @@
 // ============================================================
-// 📦 DATABASE - v5.1.0 FULL (In-Memory)
+// 📦 DATABASE - v5.1.0 FULL (In-Memory) - FIXED
 // ============================================================
 
 const crypto = require('crypto');
-const config = require('./config');
+
+// ============================================================
+// CONSTANTS (hardcoded to avoid circular dependency)
+// ============================================================
+
+const CHALLENGE_EXPIRY_MS = 60 * 1000; // 60 seconds
+const CLEANUP_INTERVAL_MS = 30 * 1000; // 30 seconds
+const MAX_LOGS = 1000;
 
 // ============================================================
 // STORAGE
@@ -24,7 +31,7 @@ setInterval(() => {
     let cleaned = 0;
     
     for (const [id, data] of challengeMap.entries()) {
-        if (now - data.createdAt > config.CHALLENGE.EXPIRY_MS) {
+        if (now - data.createdAt > CHALLENGE_EXPIRY_MS) {
             challengeMap.delete(id);
             cleaned++;
         }
@@ -33,7 +40,7 @@ setInterval(() => {
     if (cleaned > 0) {
         console.log(`🧹 [CLEANUP] Removed ${cleaned} expired challenges`);
     }
-}, config.CHALLENGE.CLEANUP_INTERVAL_MS);
+}, CLEANUP_INTERVAL_MS);
 
 // ============================================================
 // DATABASE MODULE
@@ -51,7 +58,7 @@ module.exports = {
             });
             
             // Limit log size
-            while (logs.length > config.CACHE.MAX_LOGS) {
+            while (logs.length > MAX_LOGS) {
                 logs.pop();
             }
         },
@@ -300,7 +307,7 @@ module.exports = {
             }
             
             // Check expiry
-            if (Date.now() - challenge.createdAt > config.CHALLENGE.EXPIRY_MS) {
+            if (Date.now() - challenge.createdAt > CHALLENGE_EXPIRY_MS) {
                 challengeMap.delete(id);
                 return { 
                     valid: false, 
