@@ -1,0 +1,59 @@
+
+---
+
+## 📄 File 4: `src/config.js`
+
+```javascript
+// ============================================================
+// ⚙️ CONFIGURATION - v5.1.0 FULL
+// ============================================================
+
+module.exports = {
+    // Script source URL (required)
+    SCRIPT_SOURCE_URL: process.env.SCRIPT_SOURCE_URL || '',
+    
+    // Security keys
+    ADMIN_KEY: process.env.ADMIN_KEY || 'change-this-admin-key-in-production',
+    SECRET_KEY: process.env.SECRET_KEY || 'change-this-secret-key-in-production',
+    
+    // Script mode - set to true if script is already obfuscated
+    SCRIPT_ALREADY_OBFUSCATED: process.env.SCRIPT_ALREADY_OBFUSCATED === 'true',
+    
+    // Whitelist user IDs - empty array means allow all
+    WHITELIST_USER_IDS: (process.env.WHITELIST_USER_IDS || '')
+        .split(',')
+        .map(id => parseInt(id.trim()))
+        .filter(id => !isNaN(id) && id > 0),
+    
+    // Owner user IDs - script will stop if owner joins
+    OWNER_USER_IDS: (process.env.OWNER_USER_IDS || '')
+        .split(',')
+        .map(id => parseInt(id.trim()))
+        .filter(id => !isNaN(id) && id > 0),
+    
+    // Allowed place IDs - empty array means allow all games
+    ALLOWED_PLACE_IDS: (process.env.ALLOWED_PLACE_IDS || '')
+        .split(',')
+        .map(id => parseInt(id.trim()))
+        .filter(id => !isNaN(id) && id > 0),
+    
+    // Rate limiting settings
+    RATE_LIMIT: {
+        AUTH_MAX: parseInt(process.env.AUTH_RATE_LIMIT) || 20,
+        GENERAL_MAX: parseInt(process.env.GENERAL_RATE_LIMIT) || 100,
+        STRICT_MAX: parseInt(process.env.STRICT_RATE_LIMIT) || 10,
+        WINDOW_MS: 60 * 1000 // 1 minute
+    },
+    
+    // Challenge settings
+    CHALLENGE: {
+        EXPIRY_MS: 60 * 1000, // 60 seconds
+        CLEANUP_INTERVAL_MS: 30 * 1000 // 30 seconds
+    },
+    
+    // Cache settings
+    CACHE: {
+        SCRIPT_TTL: parseInt(process.env.CACHE_TTL) || 0, // 0 = no expiry
+        MAX_LOGS: parseInt(process.env.MAX_LOGS) || 1000
+    }
+};
