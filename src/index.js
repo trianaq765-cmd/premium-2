@@ -25,22 +25,63 @@ const UNAUTHORIZED_HTML = `<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Unauthorized</title>
+    <title>Unauthorized | Premium Protect</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { 
-            background: #000; color: #fff; font-family: system-ui;
-            height: 100vh; display: flex; align-items: center; 
-            justify-content: center; text-align: center;
+        body, html {
+            width: 100%; height: 100%; overflow: hidden;
+            background-color: #000000;
+            font-family: 'Inter', -apple-system, sans-serif;
+            color: #ffffff;
         }
-        h1 { font-size: 2rem; margin-bottom: 1rem; }
-        p { color: #666; }
+        .bg-layer {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(270deg, #000000, #0f172a, #000000);
+            background-size: 600% 600%;
+            animation: gradientShift 30s ease infinite;
+            z-index: 1;
+        }
+        .container {
+            position: relative; z-index: 10; height: 100vh;
+            display: flex; flex-direction: column;
+            justify-content: center; align-items: center;
+            text-align: center; padding: 20px; user-select: none;
+        }
+        .auth-label {
+            display: flex; align-items: center; gap: 12px;
+            color: #ffffff; font-size: 1.1rem; font-weight: 600;
+            letter-spacing: 3px; text-transform: uppercase;
+            margin-bottom: 25px;
+        }
+        h1 {
+            color: #ffffff;
+            font-size: clamp(1.8rem, 5vw, 2.5rem);
+            font-weight: 800; max-width: 700px;
+            margin: 0 0 20px 0; line-height: 1.3;
+            background: linear-gradient(180deg, #ffffff 40%, #94a3b8 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        p { color: rgba(255, 255, 255, 0.4); font-size: 1.1rem; margin: 0; }
+        .icon { font-size: 1.4rem; }
+        @keyframes gradientShift {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
     </style>
 </head>
 <body>
-    <div>
-        <h1>⛔ Not Authorized</h1>
-        <p>You are not allowed to view this.</p>
+    <div class="bg-layer"></div>
+    <div class="container">
+        <div class="auth-label">
+            <span class="icon">⛔</span>
+            Not Authorized
+            <span class="icon">⛔</span>
+        </div>
+        <h1>You are not allowed to view these files.</h1>
+        <p>Close this page & proceed.</p>
     </div>
 </body>
 </html>`;
