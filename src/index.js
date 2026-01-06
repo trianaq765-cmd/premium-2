@@ -10,7 +10,122 @@ const { generateProtectedScript, generateSessionKey } = require('./protection');
 
 const app = express();
 
-const UNAUTHORIZED_HTML = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Unauthorized</title><style>*{margin:0;padding:0;box-sizing:border-box}body{width:100%;height:100vh;background:#000;font-family:sans-serif;color:#fff;display:flex;justify-content:center;align-items:center;flex-direction:column}.shield{font-size:4rem;margin-bottom:20px}h1{color:#ef4444;font-size:1.5rem;margin-bottom:10px}p{color:rgba(255,255,255,0.5)}</style></head><body><div class="shield">🛡️</div><h1>⛔ Access Denied ⛔</h1><p>Error Code: 403 | Forbidden</p></body></html>`;
+const UNAUTHORIZED_HTML = `<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Unauthorized | Premium Protect</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body, html {
+            width: 100%; height: 100%; overflow: hidden;
+            background-color: #000000;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            color: #ffffff;
+        }
+        .bg-layer {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(270deg, #000000, #0f172a, #1e1b4b, #0f172a, #000000);
+            background-size: 800% 800%;
+            animation: gradientShift 30s ease infinite;
+            z-index: 1;
+        }
+        .particles {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 2;
+            pointer-events: none;
+        }
+        .particle {
+            position: absolute;
+            width: 2px; height: 2px;
+            background: rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            animation: float 15s infinite;
+        }
+        .container {
+            position: relative; z-index: 10; height: 100vh;
+            display: flex; flex-direction: column;
+            justify-content: center; align-items: center;
+            text-align: center; padding: 20px; user-select: none;
+        }
+        .shield {
+            font-size: 4rem;
+            margin-bottom: 20px;
+            animation: pulse 2s ease-in-out infinite;
+        }
+        .auth-label {
+            display: flex; align-items: center; gap: 12px;
+            color: #ef4444; font-size: 1.1rem; font-weight: 600;
+            letter-spacing: 3px; text-transform: uppercase;
+            margin-bottom: 25px;
+            text-shadow: 0 0 20px rgba(239, 68, 68, 0.5);
+        }
+        h1 {
+            color: #ffffff;
+            font-size: clamp(1.8rem, 5vw, 2.5rem);
+            font-weight: 800; max-width: 700px;
+            margin: 0 0 20px 0; line-height: 1.3;
+            background: linear-gradient(180deg, #ffffff 40%, #94a3b8 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        p { 
+            color: rgba(255, 255, 255, 0.4); 
+            font-size: 1.1rem; 
+            margin: 0;
+            max-width: 500px;
+        }
+        .code {
+            margin-top: 30px;
+            padding: 15px 30px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            font-family: 'Fira Code', monospace;
+            font-size: 0.9rem;
+            color: rgba(255, 255, 255, 0.6);
+        }
+        @keyframes gradientShift {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.1); opacity: 0.8; }
+        }
+        @keyframes float {
+            0%, 100% { transform: translateY(100vh) rotate(0deg); opacity: 0; }
+            10% { opacity: 1; }
+            90% { opacity: 1; }
+            100% { transform: translateY(-100vh) rotate(720deg); opacity: 0; }
+        }
+    </style>
+</head>
+<body>
+    <div class="bg-layer"></div>
+    <div class="particles">
+        ${Array.from({length: 20}, (_, i) => 
+            `<div class="particle" style="left: ${Math.random() * 100}%; animation-delay: ${Math.random() * 15}s; animation-duration: ${15 + Math.random() * 10}s;"></div>`
+        ).join('')}
+    </div>
+    <div class="container">
+        <div class="shield">🛡️</div>
+        <div class="auth-label">
+            <span>⛔</span>
+            Access Denied
+            <span>⛔</span>
+        </div>
+        <h1>You are not authorized to view this resource.</h1>
+        <p>This endpoint is protected and requires valid executor authentication.</p>
+        <div class="code">Error Code: 403 | Forbidden</div>
+    </div>
+</body>
+</html>`;
 
 app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false, crossOriginResourcePolicy: false }));
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'DELETE', 'PUT', 'PATCH'], allowedHeaders: ['Content-Type', 'x-admin-key', 'Authorization', 'x-hwid', 'x-player-id'] }));
