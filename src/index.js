@@ -1,6 +1,5 @@
 // ============================================================
-// 🛡️ PREMIUM LOADER v5.0.0 - COMPATIBLE VERSION
-// Menggunakan /script endpoint seperti versi lama
+// 🛡️ PREMIUM LOADER v5.1.0 - WITH OBFUSCATION SUPPORT
 // ============================================================
 
 const express = require('express');
@@ -25,63 +24,18 @@ const UNAUTHORIZED_HTML = `<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Unauthorized | Premium Protect</title>
+    <title>Unauthorized</title>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body, html {
-            width: 100%; height: 100%; overflow: hidden;
-            background-color: #000000;
-            font-family: 'Inter', -apple-system, sans-serif;
-            color: #ffffff;
-        }
-        .bg-layer {
-            position: fixed;
-            top: 0; left: 0; width: 100%; height: 100%;
-            background: linear-gradient(270deg, #000000, #0f172a, #000000);
-            background-size: 600% 600%;
-            animation: gradientShift 30s ease infinite;
-            z-index: 1;
-        }
-        .container {
-            position: relative; z-index: 10; height: 100vh;
-            display: flex; flex-direction: column;
-            justify-content: center; align-items: center;
-            text-align: center; padding: 20px; user-select: none;
-        }
-        .auth-label {
-            display: flex; align-items: center; gap: 12px;
-            color: #ffffff; font-size: 1.1rem; font-weight: 600;
-            letter-spacing: 3px; text-transform: uppercase;
-            margin-bottom: 25px;
-        }
-        h1 {
-            color: #ffffff;
-            font-size: clamp(1.8rem, 5vw, 2.5rem);
-            font-weight: 800; max-width: 700px;
-            margin: 0 0 20px 0; line-height: 1.3;
-            background: linear-gradient(180deg, #ffffff 40%, #94a3b8 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-        p { color: rgba(255, 255, 255, 0.4); font-size: 1.1rem; margin: 0; }
-        .icon { font-size: 1.4rem; }
-        @keyframes gradientShift {
-            0% { background-position: 0% 50%; }
-            50% { background-position: 100% 50%; }
-            100% { background-position: 0% 50%; }
-        }
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{background:#000;color:#fff;font-family:system-ui;height:100vh;display:flex;align-items:center;justify-content:center;text-align:center}
+        h1{font-size:2rem;margin-bottom:1rem}
+        p{color:#666}
     </style>
 </head>
 <body>
-    <div class="bg-layer"></div>
-    <div class="container">
-        <div class="auth-label">
-            <span class="icon">⛔</span>
-            Not Authorized
-            <span class="icon">⛔</span>
-        </div>
-        <h1>You are not allowed to view these files.</h1>
-        <p>Close this page & proceed.</p>
+    <div>
+        <h1>⛔ Not Authorized</h1>
+        <p>You are not allowed to view this.</p>
     </div>
 </body>
 </html>`;
@@ -172,6 +126,43 @@ function secureCompare(a, b) {
     }
 }
 
+function isScriptObfuscated(script) {
+    if (!script || typeof script !== 'string') return false;
+    
+    // Check for common obfuscator signatures
+    const obfuscatorPatterns = [
+        /IronBrew/i,
+        /Prometheus/i,
+        /Moonsec/i,
+        /Luraph/i,
+        /PSU|PaidScriptUploader/i,
+        /Aztup/i,
+        // Common obfuscated patterns
+        /^local \w{1,3}=\{/,                    // local a={
+        /\\(\d{1,3})/,                          // \123 escape sequences
+        /\["\\(\d+)/,                           // ["\123...]
+        /local \w+="\\/,                        // local a="\...
+        /getfenv\s*\(\s*\d+\s*\)/,             // getfenv(0)
+        /string\.char\s*\(\s*\d+/,              // string.char(123
+    ];
+    
+    for (const pattern of obfuscatorPatterns) {
+        if (pattern.test(script)) return true;
+    }
+    
+    // Check for high density of escape sequences (obfuscated indicator)
+    const escapeCount = (script.match(/\\\d{1,3}/g) || []).length;
+    if (escapeCount > 50 && script.length > 1000) return true;
+    
+    // Check for very long single lines (obfuscated scripts are often minified)
+    const lines = script.split('\n');
+    for (const line of lines) {
+        if (line.length > 5000) return true;
+    }
+    
+    return false;
+}
+
 // ============================================================
 // 🏠 ROOT & HEALTH
 // ============================================================
@@ -180,20 +171,33 @@ app.get('/', (req, res) => {
     if (isBrowser(req)) {
         return res.status(403).type('text/html').send(UNAUTHORIZED_HTML);
     }
-    res.json({ status: "online", version: "5.0.0" });
+    res.json({ status: "online", version: "5.1.0" });
 });
 
 app.get('/health', (req, res) => {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
+app.get('/debug', (req, res) => {
+    res.json({
+        status: "ok",
+        version: "5.1.0",
+        config: {
+            hasScriptUrl: !!config.SCRIPT_SOURCE_URL,
+            scriptAlreadyObfuscated: config.SCRIPT_ALREADY_OBFUSCATED,
+            whitelistCount: config.WHITELIST_USER_IDS.length,
+            ownerCount: config.OWNER_USER_IDS.length,
+            allowedGamesCount: config.ALLOWED_PLACE_IDS.length
+        },
+        stats: db.getStats()
+    });
+});
+
 // ============================================================
-// 🔐 AUTH ENDPOINTS (NEW - 2-Step Verification)
+// 🔐 AUTH ENDPOINTS
 // ============================================================
 
 app.post('/api/auth/challenge', async (req, res) => {
-    console.log('📥 [CHALLENGE] Request received');
-    
     if (isBrowser(req)) {
         return res.status(403).json({ success: false, error: "Forbidden" });
     }
@@ -208,14 +212,12 @@ app.post('/api/auth/challenge', async (req, res) => {
         const userIdNum = parseInt(userId);
         const placeIdNum = parseInt(placeId);
 
-        // Check blocked
         const blockInfo = blockedDevices.isBlocked(hwid, getClientIP(req), userIdNum);
         if (blockInfo.blocked) {
             logAccess(req, 'CHALLENGE_BLOCKED', false, { userId: userIdNum });
             return res.status(403).json({ success: false, error: "Access denied" });
         }
 
-        // Check whitelist
         if (config.WHITELIST_USER_IDS.length > 0) {
             if (!config.WHITELIST_USER_IDS.includes(userIdNum)) {
                 logAccess(req, 'CHALLENGE_NOT_WHITELISTED', false, { userId: userIdNum });
@@ -223,7 +225,6 @@ app.post('/api/auth/challenge', async (req, res) => {
             }
         }
 
-        // Check allowed games
         if (config.ALLOWED_PLACE_IDS.length > 0) {
             if (!config.ALLOWED_PLACE_IDS.includes(placeIdNum)) {
                 logAccess(req, 'CHALLENGE_WRONG_GAME', false, { placeId: placeIdNum });
@@ -231,9 +232,7 @@ app.post('/api/auth/challenge', async (req, res) => {
             }
         }
 
-        // Create challenge
         const challenge = challenges.create(userIdNum, hwid, placeIdNum, getClientIP(req));
-        
         logAccess(req, 'CHALLENGE_ISSUED', true, { userId: userIdNum });
 
         res.json({
@@ -250,8 +249,6 @@ app.post('/api/auth/challenge', async (req, res) => {
 });
 
 app.post('/api/auth/verify', async (req, res) => {
-    console.log('📥 [VERIFY] Request received');
-    
     if (isBrowser(req)) {
         return res.status(403).json({ success: false, error: "Forbidden" });
     }
@@ -263,7 +260,6 @@ app.post('/api/auth/verify', async (req, res) => {
             return res.status(400).json({ success: false, error: "Missing fields" });
         }
 
-        // Verify challenge
         const result = challenges.verify(challengeId, solution, getClientIP(req));
         
         if (!result.valid) {
@@ -272,9 +268,7 @@ app.post('/api/auth/verify', async (req, res) => {
         }
 
         const challenge = result.challenge;
-        console.log(`✅ [VERIFY] User ${challenge.userId} verified`);
 
-        // Get script
         let script = scriptCache.get('main_script');
         
         if (!script) {
@@ -290,18 +284,28 @@ app.post('/api/auth/verify', async (req, res) => {
                 script = response.data;
                 scriptCache.set('main_script', script);
             } catch (fetchError) {
-                console.error('Fetch error:', fetchError.message);
                 return res.status(500).json({ success: false, error: "Failed to fetch script" });
             }
         }
 
-        // Generate session key
-        const sessionKey = generateSessionKey(
-            challenge.userId, 
-            challenge.hwid, 
-            timestamp, 
-            config.SECRET_KEY
-        );
+        const sessionKey = generateSessionKey(challenge.userId, challenge.hwid, timestamp, config.SECRET_KEY);
+        const serverUrl = process.env.RENDER_EXTERNAL_URL || `${req.protocol}://${req.get('host')}`;
+
+        // Check if script is already obfuscated
+        const alreadyObfuscated = config.SCRIPT_ALREADY_OBFUSCATED || isScriptObfuscated(script);
+
+        if (alreadyObfuscated) {
+            // Return script as-is with minimal wrapper
+            logAccess(req, 'SCRIPT_SERVED_RAW', true, { userId: challenge.userId });
+            
+            return res.json({
+                success: true,
+                mode: 'raw',
+                script: script,
+                ownerIds: config.OWNER_USER_IDS,
+                banEndpoint: `${serverUrl}/api/ban`
+            });
+        }
 
         // Encrypt script
         const chunks = [];
@@ -316,12 +320,11 @@ app.post('/api/auth/verify', async (req, res) => {
             chunks.push(encrypted);
         }
 
-        const serverUrl = process.env.RENDER_EXTERNAL_URL || `${req.protocol}://${req.get('host')}`;
-
-        logAccess(req, 'SCRIPT_SERVED_SECURE', true, { userId: challenge.userId });
+        logAccess(req, 'SCRIPT_SERVED_ENCRYPTED', true, { userId: challenge.userId });
 
         res.json({
             success: true,
+            mode: 'encrypted',
             key: sessionKey,
             chunks: chunks,
             ownerIds: config.OWNER_USER_IDS,
@@ -335,19 +338,17 @@ app.post('/api/auth/verify', async (req, res) => {
 });
 
 // ============================================================
-// 📜 LOADER ENDPOINT (untuk 2-step auth)
+// 📜 LOADER ENDPOINT
 // ============================================================
 
 app.get('/loader', (req, res) => {
-    console.log('📥 [LOADER] Request received');
-    
     if (isBrowser(req)) {
         return res.status(403).type('text/html').send(UNAUTHORIZED_HTML);
     }
 
     const serverUrl = process.env.RENDER_EXTERNAL_URL || `${req.protocol}://${req.get('host')}`;
 
-    const loaderScript = `--[[ Secure Loader v5.0 ]]
+    const loaderScript = `--[[ Secure Loader v5.1 ]]
 local SERVER = "${serverUrl}"
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
@@ -400,6 +401,51 @@ local function xorDecrypt(data, key)
     return table.concat(result)
 end
 
+local function setupOwnerProtection(ownerIds)
+    if not ownerIds or #ownerIds == 0 then return end
+    
+    local function isOwner(uid)
+        for _, id in ipairs(ownerIds) do
+            if uid == id then return true end
+        end
+        return false
+    end
+    
+    local function checkOwner()
+        for _, p in pairs(Players:GetPlayers()) do
+            if isOwner(p.UserId) and p ~= LocalPlayer then
+                return true
+            end
+        end
+        return false
+    end
+    
+    if checkOwner() then
+        notify("⚠️", "Cannot load here", 3)
+        return false
+    end
+    
+    task.spawn(function()
+        while task.wait(15) do
+            if checkOwner() then
+                if _G._SCRIPT_CLEANUP then pcall(_G._SCRIPT_CLEANUP) end
+                notify("⚠️", "Owner detected", 3)
+                break
+            end
+        end
+    end)
+    
+    Players.PlayerAdded:Connect(function(p)
+        task.wait(1)
+        if isOwner(p.UserId) then
+            if _G._SCRIPT_CLEANUP then pcall(_G._SCRIPT_CLEANUP) end
+            notify("⚠️", "Owner detected", 3)
+        end
+    end)
+    
+    return true
+end
+
 local function main()
     notify("🔄 Loading", "Connecting...", 2)
     
@@ -438,28 +484,23 @@ local function main()
     
     notify("✅ Verified", "Loading script...", 2)
     
-    local parts = {}
-    for i, chunk in ipairs(verifyData.chunks) do
-        parts[i] = xorDecrypt(chunk, verifyData.key)
+    -- Setup owner protection
+    if not setupOwnerProtection(verifyData.ownerIds) then
+        return
     end
     
-    local fullScript = table.concat(parts)
+    local fullScript
     
-    local OWNER_IDS = verifyData.ownerIds or {}
-    if #OWNER_IDS > 0 then
-        task.spawn(function()
-            while task.wait(15) do
-                for _, p in pairs(Players:GetPlayers()) do
-                    for _, oid in ipairs(OWNER_IDS) do
-                        if p.UserId == oid and p ~= LocalPlayer then
-                            if _G._SCRIPT_CLEANUP then pcall(_G._SCRIPT_CLEANUP) end
-                            notify("⚠️ Stopped", "Owner detected", 3)
-                            return
-                        end
-                    end
-                end
-            end
-        end)
+    if verifyData.mode == "raw" then
+        -- Script sudah obfuscated, langsung pakai
+        fullScript = verifyData.script
+    else
+        -- Decrypt chunks
+        local parts = {}
+        for i, chunk in ipairs(verifyData.chunks) do
+            parts[i] = xorDecrypt(chunk, verifyData.key)
+        end
+        fullScript = table.concat(parts)
     end
     
     local fn = loadstring(fullScript)
@@ -474,36 +515,26 @@ main()
 });
 
 // ============================================================
-// 📜 LEGACY /script ENDPOINT (Kompatibel dengan kode lama)
+// 📜 LEGACY /script ENDPOINT
 // ============================================================
 
 app.get('/script', async (req, res) => {
-    console.log('📥 [SCRIPT] Request received (legacy endpoint)');
-    
     if (isBrowser(req)) {
-        logAccess(req, 'BROWSER_BLOCKED', false);
         return res.status(403).type('text/html').send(UNAUTHORIZED_HTML);
     }
 
     const playerIdHeader = getPlayerID(req);
     const hwidHeader = getHWID(req);
-    
-    // Check whitelist
-    let isWhitelisted = false;
-    if (playerIdHeader && config.WHITELIST_USER_IDS.length > 0) {
-        isWhitelisted = config.WHITELIST_USER_IDS.includes(parseInt(playerIdHeader));
-    } else if (config.WHITELIST_USER_IDS.length === 0) {
-        isWhitelisted = true; // No whitelist = allow all
-    }
 
-    // Check blocked
+    let isWhitelisted = config.WHITELIST_USER_IDS.length === 0 || 
+        (playerIdHeader && config.WHITELIST_USER_IDS.includes(parseInt(playerIdHeader)));
+
     if (!isWhitelisted) {
         const blockInfo = blockedDevices.isBlocked(hwidHeader, getClientIP(req), playerIdHeader);
         if (blockInfo.blocked) {
-            logAccess(req, 'BLOCKED_DEVICE', false);
-            return res.type('text/plain').send(`
-game:GetService("Players").LocalPlayer:Kick("⛔ BANNED\\n\\nReason: ${blockInfo.reason}")
-`);
+            return res.type('text/plain').send(
+                `game:GetService("Players").LocalPlayer:Kick("⛔ BANNED\\n\\n${blockInfo.reason}")`
+            );
         }
     }
 
@@ -512,15 +543,13 @@ game:GetService("Players").LocalPlayer:Kick("⛔ BANNED\\n\\nReason: ${blockInfo
         
         if (!script) {
             if (!config.SCRIPT_SOURCE_URL) {
-                console.error('❌ SCRIPT_SOURCE_URL not set!');
                 return res.type('text/plain').send(`
-game:GetService("StarterGui"):SetCore("SendNotification", {
-    Title = "⚠️ Error", Text = "Server not configured", Duration = 5
-})
-`);
+                    game:GetService("StarterGui"):SetCore("SendNotification", {
+                        Title = "⚠️ Error", Text = "Not configured", Duration = 5
+                    })
+                `);
             }
             
-            console.log(`🔄 Fetching script...`);
             const response = await axios.get(config.SCRIPT_SOURCE_URL, {
                 timeout: 15000,
                 headers: { 'User-Agent': 'Roblox/WinInet' }
@@ -532,10 +561,73 @@ game:GetService("StarterGui"):SetCore("SendNotification", {
         }
 
         const serverUrl = process.env.RENDER_EXTERNAL_URL || `${req.protocol}://${req.get('host')}`;
-        const timestamp = Date.now();
+        const ownerStr = config.OWNER_USER_IDS.join(', ');
+
+        // Check if already obfuscated
+        const alreadyObfuscated = config.SCRIPT_ALREADY_OBFUSCATED || isScriptObfuscated(script);
+
+        if (alreadyObfuscated) {
+            console.log('📦 [SCRIPT] RAW MODE - Script already obfuscated');
+            
+            const wrappedScript = `-- Secure Loader (Raw Mode) v5.1
+local _O = {${ownerStr}}
+local _P = game:GetService("Players")
+local _L = _P.LocalPlayer
+local _S = game:GetService("StarterGui")
+local _A = true
+
+local function _IO(u)
+    for _,i in ipairs(_O) do if u==i then return true end end
+    return false
+end
+
+local function _CO()
+    if _IO(_L.UserId) then return false end
+    for _,p in pairs(_P:GetPlayers()) do
+        if _IO(p.UserId) and p~=_L then return true end
+    end
+    return false
+end
+
+if _CO() then
+    _S:SetCore("SendNotification",{Title="⚠️",Text="Cannot load",Duration=3})
+    return
+end
+
+task.spawn(function()
+    while _A and task.wait(15) do
+        for _,p in pairs(_P:GetPlayers()) do
+            if _IO(p.UserId) and p~=_L then
+                _A=false
+                if _G._SCRIPT_CLEANUP then pcall(_G._SCRIPT_CLEANUP) end
+                _S:SetCore("SendNotification",{Title="⚠️",Text="Owner detected",Duration=3})
+                return
+            end
+        end
+    end
+end)
+
+_P.PlayerAdded:Connect(function(p)
+    if _A and _IO(p.UserId) then
+        _A=false
+        if _G._SCRIPT_CLEANUP then pcall(_G._SCRIPT_CLEANUP) end
+        _S:SetCore("SendNotification",{Title="⚠️",Text="Owner detected",Duration=3})
+    end
+end)
+
+${script}
+`;
+
+            logAccess(req, 'SCRIPT_SERVED_RAW', true, { size: wrappedScript.length });
+            return res.type('text/plain').send(wrappedScript);
+        }
+
+        // Not obfuscated, use full protection
+        console.log('📦 [SCRIPT] PROTECTED MODE');
         
-        // Generate session key jika ada HWID
+        const timestamp = Date.now();
         let sessionKey = null;
+        
         if (hwidHeader && playerIdHeader) {
             sessionKey = generateSessionKey(playerIdHeader, hwidHeader, timestamp, config.SECRET_KEY);
         }
@@ -548,21 +640,16 @@ game:GetService("StarterGui"):SetCore("SendNotification", {
             sessionKey: sessionKey
         });
 
-        logAccess(req, 'SCRIPT_SERVED', true, { 
-            size: protectedScript.length,
-            encrypted: !!sessionKey
-        });
-        
-        res.type('text/plain').send(protectedScript);
+        logAccess(req, 'SCRIPT_SERVED_PROTECTED', true, { size: protectedScript.length });
+        return res.type('text/plain').send(protectedScript);
 
     } catch (error) {
         console.error('Script error:', error.message);
-        logAccess(req, 'SCRIPT_ERROR', false, { error: error.message });
-        res.type('text/plain').send(`
-game:GetService("StarterGui"):SetCore("SendNotification", {
-    Title = "❌ Error", Text = "Failed to load", Duration = 5
-})
-`);
+        return res.type('text/plain').send(`
+            game:GetService("StarterGui"):SetCore("SendNotification", {
+                Title = "❌ Error", Text = "Failed", Duration = 5
+            })
+        `);
     }
 });
 
@@ -625,31 +712,12 @@ app.delete('/api/admin/bans/:banId', adminAuth, (req, res) => {
 
 app.post('/api/admin/cache/clear', adminAuth, (req, res) => {
     scriptCache.flushAll();
-    res.json({ success: true });
+    res.json({ success: true, message: "Cache cleared" });
 });
 
 app.post('/api/admin/bans/clear', adminAuth, (req, res) => {
     blockedDevices.clearAll();
-    res.json({ success: true });
-});
-
-// ============================================================
-// 🔍 DEBUG
-// ============================================================
-
-app.get('/debug', (req, res) => {
-    res.json({
-        status: "ok",
-        config: {
-            hasScriptUrl: !!config.SCRIPT_SOURCE_URL,
-            whitelistCount: config.WHITELIST_USER_IDS.length,
-            ownerCount: config.OWNER_USER_IDS.length,
-            allowedGamesCount: config.ALLOWED_PLACE_IDS.length
-        },
-        cached: scriptCache.has('main_script'),
-        challenges: challenges.store.size,
-        blocked: blockedDevices.count()
-    });
+    res.json({ success: true, message: "All bans cleared" });
 });
 
 // ============================================================
@@ -657,7 +725,6 @@ app.get('/debug', (req, res) => {
 // ============================================================
 
 app.use('*', (req, res) => {
-    console.log(`⚠️ [404] ${req.method} ${req.originalUrl}`);
     if (isBrowser(req)) {
         return res.status(404).type('text/html').send(UNAUTHORIZED_HTML);
     }
@@ -672,22 +739,22 @@ const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, '0.0.0.0', () => {
     console.log('');
-    console.log('╔═══════════════════════════════════════════════════════╗');
-    console.log('║       🛡️  PREMIUM LOADER v5.0.0 - READY              ║');
-    console.log('╠═══════════════════════════════════════════════════════╣');
-    console.log(`║  🌐 Port: ${PORT}                                         ║`);
-    console.log('║                                                       ║');
-    console.log('║  📍 Endpoints:                                        ║');
-    console.log('║     GET  /script  → Legacy (kompatibel lama)          ║');
-    console.log('║     GET  /loader  → New secure loader                 ║');
-    console.log('║     POST /api/auth/challenge → 2-step auth            ║');
-    console.log('║     POST /api/auth/verify    → 2-step verify          ║');
-    console.log('║                                                       ║');
-    console.log(`║  ✅ SCRIPT_SOURCE_URL: ${config.SCRIPT_SOURCE_URL ? 'SET' : 'NOT SET!'}                      ║`);
-    console.log(`║  👥 Whitelist: ${config.WHITELIST_USER_IDS.length} users                            ║`);
-    console.log(`║  👑 Owners: ${config.OWNER_USER_IDS.length} users                               ║`);
-    console.log('║                                                       ║');
-    console.log('╚═══════════════════════════════════════════════════════╝');
+    console.log('╔════════════════════════════════════════════════════════════╗');
+    console.log('║        🛡️  PREMIUM LOADER v5.1.0 - READY                  ║');
+    console.log('╠════════════════════════════════════════════════════════════╣');
+    console.log(`║  🌐 Port: ${PORT}                                              ║`);
+    console.log('║                                                            ║');
+    console.log('║  📍 Endpoints:                                             ║');
+    console.log('║     GET  /script  → Legacy endpoint                        ║');
+    console.log('║     GET  /loader  → Secure loader                          ║');
+    console.log('║     GET  /debug   → Debug info                             ║');
+    console.log('║                                                            ║');
+    console.log(`║  ✅ SCRIPT_SOURCE_URL: ${config.SCRIPT_SOURCE_URL ? 'SET' : 'NOT SET!'}                          ║`);
+    console.log(`║  ✅ SCRIPT_ALREADY_OBFUSCATED: ${config.SCRIPT_ALREADY_OBFUSCATED}                    ║`);
+    console.log(`║  👥 Whitelist: ${config.WHITELIST_USER_IDS.length} users                                 ║`);
+    console.log(`║  👑 Owners: ${config.OWNER_USER_IDS.length} users                                    ║`);
+    console.log('║                                                            ║');
+    console.log('╚════════════════════════════════════════════════════════════╝');
     console.log('');
 });
 
