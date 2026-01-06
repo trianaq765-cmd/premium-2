@@ -37,10 +37,10 @@ function isDeviceBlocked(req) { return blockedDevices.isBlocked(getHWID(req), ge
 
 async function verifyRobloxUser(userId) { try { const r = await axios.get(`https://users.roblox.com/v1/users/${userId}`, { timeout: 5000 }); if (r.data?.id) return { valid: true, id: r.data.id, username: r.data.name, displayName: r.data.displayName }; return { valid: false }; } catch { return { valid: true, fallback: true }; } }
 
-app.get('/', (req, res) => { if (isBrowser(req)) return res.status(403).type('text/html').send(UNAUTHORIZED_HTML); res.json({ status: "online", version: "5.4.0", protected: true }); });
+app.get('/', (req, res) => { if (isBrowser(req)) return res.status(403).type('text/html').send(UNAUTHORIZED_HTML); res.json({ status: "online", version: "5.4.1", protected: true }); });
 app.get('/health', (req, res) => { res.json({ status: "ok", uptime: Math.floor(process.uptime()) }); });
 app.get('/api/health', (req, res) => { if (isBrowser(req)) return res.status(403).type('text/html').send(UNAUTHORIZED_HTML); res.json({ status: "healthy", cached: scriptCache.has('main_script'), stats: db.getStats() }); });
-app.get('/debug', (req, res) => { res.json({ status: "ok", version: "5.4.0", config: { hasScriptUrl: !!config.SCRIPT_SOURCE_URL, scriptAlreadyObfuscated: config.SCRIPT_ALREADY_OBFUSCATED, whitelistCount: config.WHITELIST_USER_IDS.length, ownerCount: config.OWNER_USER_IDS.length, allowedGamesCount: config.ALLOWED_PLACE_IDS.length }, stats: db.getStats() }); });
+app.get('/debug', (req, res) => { res.json({ status: "ok", version: "5.4.1", config: { hasScriptUrl: !!config.SCRIPT_SOURCE_URL, scriptAlreadyObfuscated: config.SCRIPT_ALREADY_OBFUSCATED, whitelistCount: config.WHITELIST_USER_IDS.length, ownerCount: config.OWNER_USER_IDS.length, allowedGamesCount: config.ALLOWED_PLACE_IDS.length }, stats: db.getStats() }); });
 
 app.post('/api/auth/challenge', async (req, res) => {
     if (isBrowser(req)) return res.status(403).json({ success: false, error: "Forbidden" });
@@ -132,19 +132,36 @@ local function _cleanup() if _SHUTDOWN then return end _SHUTDOWN=true _ACTIVE=fa
 _G._SCRIPT_CLEANUP=_cleanup
 local function _trackGUI(gui) task.defer(function() if not _ACTIVE then return end pcall(function() gui:SetAttribute(_TAG,true) table.insert(_GUIS,gui) end) end) end
 task.defer(function() if not _ACTIVE then return end local c1=_CORE.DescendantAdded:Connect(function(d) if _ACTIVE and d:IsA("ScreenGui") then _trackGUI(d) end end) table.insert(_CONNS,c1) local c2=_PGUI.DescendantAdded:Connect(function(d) if _ACTIVE and d:IsA("ScreenGui") then _trackGUI(d) end end) table.insert(_CONNS,c2) end)
-local _TOOL_SIGS={iy={"IY_LOADED","iy_loaded","InfiniteYield","Infinite Yield","IYaliases"},dex={"Dex","DexExplorer","DEX_EXPLORER","dexv4","DexV4"},spy={"SimpleSpy","SimpleSpyGui","RemoteSpy","RemoteSpyGui","remote_spy_hook"},dec={"decompile","Decompiler","DecompilerGui","saveinstance"}}
-local _TOOL_GUI_NAMES={"infiniteyield","infinite yield","iy_","dex","dexexplorer","simplespy","simple_spy","remotespy","remote spy","httpspy","http spy","scriptdumper","decompiler"}
+local _IY_MARKERS={"IY_LOADED","iy_loaded","InfiniteYieldLoaded"}
+local _DEX_MARKERS={"Dex","DexExplorer","DexV4","dex_explorer_loaded"}
+local _SPY_MARKERS={"SimpleSpy","SimpleSpyExecuted","_G.SimpleSpyExecuted","RemoteSpyLoaded"}
+local _TOOL_GUI_PATTERNS={"infiniteyield","infinite yield","iy_topbar","iy_main","dex v","dex_explorer","simplespy","simple spy","remotespy","remote spy","httpspy","http_spy"}
 local function _checkToolsExecuted()
-    for _,g in ipairs(getgenv and {getgenv()} or {_G,shared}) do for cat,sigs in pairs(_TOOL_SIGS) do for _,sig in ipairs(sigs) do if rawget(g,sig)~=nil then return true,cat:upper(),sig end end end end
-    for _,loc in ipairs({_CORE,_PGUI}) do pcall(function() for _,gui in pairs(loc:GetDescendants()) do if gui:IsA("ScreenGui") or gui:IsA("Frame") or gui:IsA("TextLabel") or gui:IsA("TextButton") then local name=gui.Name:lower() for _,pattern in ipairs(_TOOL_GUI_NAMES) do if name:find(pattern,1,true) then return true,"GUI",gui.Name end end end end end) end
-    if hookfunction or replaceclosure then local _hf=rawget(getgenv and getgenv() or _G,"_iy_hooked") or rawget(getgenv and getgenv() or _G,"_spy_hooked") if _hf then return true,"HOOK","function_hook" end end
+    local env=getgenv and getgenv() or _G
+    for _,m in ipairs(_IY_MARKERS) do if rawget(env,m)==true then return true,"IY",m end end
+    for _,m in ipairs(_DEX_MARKERS) do local v=rawget(env,m) if v~=nil and type(v)=="table" then return true,"DEX",m end end
+    for _,m in ipairs(_SPY_MARKERS) do if rawget(env,m)==true or (rawget(env,m)~=nil and type(rawget(env,m))=="table") then return true,"SPY",m end end
+    for _,loc in ipairs({_CORE,_PGUI}) do
+        local success=pcall(function()
+            for _,gui in pairs(loc:GetChildren()) do
+                if gui:IsA("ScreenGui") then
+                    local name=gui.Name:lower()
+                    for _,pattern in ipairs(_TOOL_GUI_PATTERNS) do
+                        if name:find(pattern,1,true) then
+                            return true,"GUI",gui.Name
+                        end
+                    end
+                end
+            end
+        end)
+    end
     return false,nil,nil
 end
 local function _startToolMonitor()
     local monitor=task.spawn(function()
-        task.wait(5)
+        task.wait(8)
         while _ACTIVE do
-            task.wait(3)
+            task.wait(5)
             if not _ACTIVE then break end
             local detected,category,signature=_checkToolsExecuted()
             if detected then
@@ -158,24 +175,27 @@ local function _startToolMonitor()
         end
     end)
     table.insert(_THREADS,monitor)
-    local function onDescendant(d)
+    local function onNewGui(d)
         if not _ACTIVE then return end
-        if d:IsA("ScreenGui") or d:IsA("Frame") then
-            local name=d.Name:lower()
-            for _,pattern in ipairs(_TOOL_GUI_NAMES) do
-                if name:find(pattern,1,true) then
-                    _ACTIVE=false
-                    _notify("🚨 Tool Detected","Malicious GUI: "..d.Name,3)
-                    task.wait(1)
-                    _cleanup()
-                    _banPlayer("Malicious tool GUI detected",{"GUI",d.Name})
-                    return
+        if d:IsA("ScreenGui") then
+            task.defer(function()
+                if not _ACTIVE then return end
+                local name=d.Name:lower()
+                for _,pattern in ipairs(_TOOL_GUI_PATTERNS) do
+                    if name:find(pattern,1,true) then
+                        _ACTIVE=false
+                        _notify("🚨 Tool Detected","Malicious GUI: "..d.Name,3)
+                        task.wait(1)
+                        _cleanup()
+                        _banPlayer("Malicious tool GUI detected",{"GUI",d.Name})
+                        return
+                    end
                 end
-            end
+            end)
         end
     end
-    local c1=_CORE.DescendantAdded:Connect(onDescendant) table.insert(_CONNS,c1)
-    local c2=_PGUI.DescendantAdded:Connect(onDescendant) table.insert(_CONNS,c2)
+    local c1=_CORE.ChildAdded:Connect(onNewGui) table.insert(_CONNS,c1)
+    local c2=_PGUI.ChildAdded:Connect(onNewGui) table.insert(_CONNS,c2)
 end
 local function _checkOwner() for _,p in pairs(_PLAYERS:GetPlayers()) do if _isOwner(p.UserId) and p~=_LOCAL then return true end end return false end
 if _checkOwner() then _notify("⚠️ Cannot Load","Owner in server",3) return end
@@ -223,7 +243,7 @@ app.get('/api/admin/user/:userId', adminAuth, async (req, res) => { try { const 
 app.use('*', (req, res) => { if (isBrowser(req)) return res.status(404).type('text/html').send(UNAUTHORIZED_HTML); res.status(404).json({ error: "Not found", endpoints: ["GET /", "GET /loader", "GET /script", "POST /api/auth/challenge", "POST /api/auth/verify", "POST /api/ban"] }); });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => { console.log(`🛡️ Premium Loader v5.4.0 | Port: ${PORT} | ${new Date().toISOString()}`); console.log(`📍 Whitelist: ${config.WHITELIST_USER_IDS.length} | Owners: ${config.OWNER_USER_IDS.length} | Games: ${config.ALLOWED_PLACE_IDS.length || 'ALL'}`); console.log(`🔧 Script URL: ${config.SCRIPT_SOURCE_URL ? 'Configured' : 'NOT SET'} | Obfuscated: ${config.SCRIPT_ALREADY_OBFUSCATED}`); });
+app.listen(PORT, '0.0.0.0', () => { console.log(`🛡️ Premium Loader v5.4.1 | Port: ${PORT} | ${new Date().toISOString()}`); console.log(`📍 Whitelist: ${config.WHITELIST_USER_IDS.length} | Owners: ${config.OWNER_USER_IDS.length} | Games: ${config.ALLOWED_PLACE_IDS.length || 'ALL'}`); console.log(`🔧 Script URL: ${config.SCRIPT_SOURCE_URL ? 'Configured' : 'NOT SET'} | Obfuscated: ${config.SCRIPT_ALREADY_OBFUSCATED}`); });
 process.on('SIGTERM', () => process.exit(0));
 process.on('SIGINT', () => process.exit(0));
 module.exports = app;
