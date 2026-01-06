@@ -1,17 +1,21 @@
+// ============================================================
+// 📦 DATABASE - v5.1.0 (In-Memory)
+// ============================================================
+
 const crypto = require('crypto');
 
-// In-memory storage
+// Storage
 const logs = [];
-const blockedDevices = [];
+const blockedList = [];
 let cachedScript = null;
-const challenges = new Map();
+const challengeMap = new Map();
 
-// Cleanup expired challenges setiap 30 detik
+// Cleanup expired challenges
 setInterval(() => {
     const now = Date.now();
-    for (const [id, data] of challenges.entries()) {
+    for (const [id, data] of challengeMap.entries()) {
         if (now - data.createdAt > 60000) {
-            challenges.delete(id);
+            challengeMap.delete(id);
         }
     }
 }, 30000);
@@ -28,8 +32,8 @@ module.exports = {
         getStats() {
             return {
                 totalLogs: logs.length,
-                blockedCount: blockedDevices.length,
-                activeChallenges: challenges.size,
+                blockedCount: blockedList.length,
+                activeChallenges: challengeMap.size,
                 hasCachedScript: !!cachedScript
             };
         }
@@ -52,7 +56,7 @@ module.exports = {
     
     blockedDevices: {
         isBlocked(hwid, ip, playerId) {
-            for (const block of blockedDevices) {
+            for (const block of blockedList) {
                 if (hwid && block.hwid === hwid) {
                     return { blocked: true, reason: block.reason, banId: block.banId };
                 }
@@ -66,29 +70,29 @@ module.exports = {
             return { blocked: false };
         },
         addBlock(data) {
-            blockedDevices.push(data);
+            blockedList.push(data);
         },
         getAll() {
-            return blockedDevices;
+            return blockedList;
         },
         count() {
-            return blockedDevices.length;
+            return blockedList.length;
         },
         removeByBanId(banId) {
-            const index = blockedDevices.findIndex(b => b.banId === banId);
+            const index = blockedList.findIndex(b => b.banId === banId);
             if (index !== -1) {
-                blockedDevices.splice(index, 1);
+                blockedList.splice(index, 1);
                 return true;
             }
             return false;
         },
         clearAll() {
-            blockedDevices.length = 0;
+            blockedList.length = 0;
         }
     },
     
     challenges: {
-        store: challenges,
+        store: challengeMap,
         
         create(userId, hwid, placeId, ip) {
             const id = crypto.randomBytes(16).toString('hex');
@@ -107,41 +111,41 @@ module.exports = {
                 createdAt: Date.now()
             };
             
-            challenges.set(id, challenge);
+            challengeMap.set(id, challenge);
             return challenge;
         },
         
         get(id) {
-            return challenges.get(id);
+            return challengeMap.get(id);
         },
         
         delete(id) {
-            challenges.delete(id);
+            challengeMap.delete(id);
         },
         
         verify(id, solution, ip) {
-            const challenge = challenges.get(id);
+            const challenge = challengeMap.get(id);
             
             if (!challenge) {
                 return { valid: false, error: 'Invalid or expired challenge' };
             }
             
             if (Date.now() - challenge.createdAt > 60000) {
-                challenges.delete(id);
+                challengeMap.delete(id);
                 return { valid: false, error: 'Challenge expired' };
             }
             
             if (challenge.ip !== ip) {
-                challenges.delete(id);
+                challengeMap.delete(id);
                 return { valid: false, error: 'IP mismatch' };
             }
             
             if (parseInt(solution) !== challenge.solution) {
-                challenges.delete(id);
+                challengeMap.delete(id);
                 return { valid: false, error: 'Invalid solution' };
             }
             
-            challenges.delete(id);
+            challengeMap.delete(id);
             return { valid: true, challenge };
         }
     }
