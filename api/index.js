@@ -3,7 +3,58 @@ const crypto = require('crypto');
 const config = require('../config');
 const db = require('../lib/redis');
 
-const UNAUTHORIZED_HTML = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>403</title><style>*{margin:0;padding:0}body{background:#000;color:#fff;font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh}.c{text-align:center}.s{font-size:4rem;margin-bottom:1rem}h1{color:#ef4444}p{color:#666}</style></head><body><div class="c"><div class="s">🛡️</div><h1>403 Forbidden</h1><p>Access Denied</p></div></body></html>`;
+const UNAUTHORIZED_HTML = `<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Unauthorized | Premium Protect</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body, html {
+            width: 100%; height: 100%; overflow: hidden;
+            background-color: #000000;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            color: #ffffff;
+        }
+        .bg-layer {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(270deg, #000000, #0f172a, #1e1b4b, #0f172a, #000000);
+            background-size: 800% 800%;
+            animation: gradientShift 30s ease infinite;
+            z-index: 1;
+        }
+        .container {
+            position: relative; z-index: 10; height: 100vh;
+            display: flex; flex-direction: column;
+            justify-content: center; align-items: center;
+            text-align: center; padding: 20px; user-select: none;
+        }
+        .shield { font-size: 4rem; margin-bottom: 20px; }
+        .auth-label {
+            display: flex; align-items: center; gap: 12px;
+            color: #ef4444; font-size: 1.1rem; font-weight: 600;
+            letter-spacing: 3px; text-transform: uppercase;
+            margin-bottom: 25px;
+        }
+        h1 { color: #ffffff; font-size: 2rem; font-weight: 800; margin: 0 0 20px 0; }
+        p { color: rgba(255, 255, 255, 0.4); font-size: 1.1rem; }
+        .code { margin-top: 30px; padding: 15px 30px; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; color: rgba(255, 255, 255, 0.6); }
+        @keyframes gradientShift { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
+    </style>
+</head>
+<body>
+    <div class="bg-layer"></div>
+    <div class="container">
+        <div class="shield">🛡️</div>
+        <div class="auth-label"><span>⛔</span> Access Denied <span>⛔</span></div>
+        <h1>You are not authorized to view this resource.</h1>
+        <p>This endpoint is protected and requires valid executor authentication.</p>
+        <div class="code">Error Code: 403 | Forbidden</div>
+    </div>
+</body>
+</html>`;
 
 function generateFakeScript() {
     const r = (l) => { let s = ''; const c = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_'; for (let i = 0; i < l; i++) s += c[Math.floor(Math.random() * c.length)]; return s; };
