@@ -71,13 +71,7 @@ function generateFakeObfuscatedScript() {
     const fakeStrings = Array.from({length: 100}, () => `"${randHex()}"`).join(',');
     const fakeTable = Array.from({length: 50}, () => `[${randNum()}]="${randStr(12)}"`).join(',');
     const fakeOps = Array.from({length: 30}, () => {
-        const ops = [
-            `${vars[Math.floor(Math.random()*vars.length)]}=${randNum()}`,
-            `${vars[Math.floor(Math.random()*vars.length)]}="${randStr(8)}"`,
-            `${vars[Math.floor(Math.random()*vars.length)]}=bit32.bxor(${randNum()},${randNum()})`,
-            `${vars[Math.floor(Math.random()*vars.length)]}=string.char(${Math.floor(Math.random()*90)+32})`,
-            `${vars[Math.floor(Math.random()*vars.length)]}=math.floor(${randNum()}/${randNum()+1})`
-        ];
+        const ops = [`${vars[Math.floor(Math.random()*vars.length)]}=${randNum()}`,`${vars[Math.floor(Math.random()*vars.length)]}="${randStr(8)}"`,`${vars[Math.floor(Math.random()*vars.length)]}=bit32.bxor(${randNum()},${randNum()})`,`${vars[Math.floor(Math.random()*vars.length)]}=string.char(${Math.floor(Math.random()*90)+32})`,`${vars[Math.floor(Math.random()*vars.length)]}=math.floor(${randNum()}/${randNum()+1})`];
         return ops[Math.floor(Math.random()*ops.length)];
     }).join(';');
     return `local ${vars[0]}=(function()local ${vars[1]}={${fakeStrings}};local ${vars[2]}={${fakeTable}};local ${vars[3]}=0;for ${vars[4]}=1,#${vars[1]} do ${vars[3]}=${vars[3]}+(string.byte(${vars[1]}[${vars[4]}],1)or 0)end;return ${vars[3]} end)();local ${vars[5]}=coroutine.wrap(function()${fakeOps};for ${vars[6]}=1,${randNum()} do coroutine.yield(${vars[6]}*${randNum()})end end);(function()local ${vars[7]}={};for ${vars[8]}=1,math.random(100,500)do ${vars[7]}[${vars[8]}]=string.rep("${randStr(5)}",math.random(1,10))end;for ${vars[9]},${vars[10]} in pairs(${vars[7]})do local ${vars[11]}=string.reverse(${vars[10]})end end)();local ${vars[12]}=function(${vars[13]})local ${vars[14]}=${vars[13]} or 0;for ${vars[15]}=1,${randNum()} do ${vars[14]}=${vars[14]}+math.sin(${vars[15]})end;return ${vars[14]} end;pcall(function()while true do local ${vars[16]}=${vars[5]}()if not ${vars[16]} then break end;${vars[12]}(${vars[16]})end end);local ${vars[17]}=setmetatable({${fakeTable}},{__index=function(${vars[18]},${vars[19]})return rawget(${vars[18]},${vars[19]})or"${randStr(20)}"end});`;
@@ -116,7 +110,6 @@ function isBrowser(req) {
 
 function isLikelyBot(req) {
     const ua = (req.headers['user-agent'] || '').toLowerCase();
-    const ip = getClientIP(req);
     const hasRobloxHeaders = req.headers['x-roblox-id'] && req.headers['x-place-id'] && req.headers['x-job-id'];
     const hasExecutorToken = req.headers['x-executor-token'] && validExecutorTokens.has(req.headers['x-executor-token']);
     if (hasRobloxHeaders || hasExecutorToken) return false;
@@ -141,11 +134,11 @@ async function verifyRobloxUser(userId) { try { const r = await axios.get(`https
 app.get('/', (req, res) => { 
     if (isBrowser(req)) return res.status(403).type('text/html').send(UNAUTHORIZED_HTML); 
     if (isLikelyBot(req)) { logAccess(req, 'BOT_BLOCKED_ROOT', false); return res.type('text/plain').send(generateFakeObfuscatedScript()); } 
-    res.json({ status: "online", version: "5.4.4", protected: true }); 
+    res.json({ status: "online", version: "5.4.5", protected: true }); 
 });
 app.get('/health', (req, res) => { res.json({ status: "ok", uptime: Math.floor(process.uptime()) }); });
 app.get('/api/health', (req, res) => { if (isBrowser(req)) return res.status(403).type('text/html').send(UNAUTHORIZED_HTML); res.json({ status: "healthy", cached: scriptCache.has('main_script'), stats: db.getStats() }); });
-app.get('/debug', (req, res) => { res.json({ status: "ok", version: "5.4.4", config: { hasScriptUrl: !!config.SCRIPT_SOURCE_URL, scriptAlreadyObfuscated: config.SCRIPT_ALREADY_OBFUSCATED, whitelistCount: config.WHITELIST_USER_IDS.length, ownerCount: config.OWNER_USER_IDS.length, allowedGamesCount: config.ALLOWED_PLACE_IDS.length }, stats: db.getStats() }); });
+app.get('/debug', (req, res) => { res.json({ status: "ok", version: "5.4.5", config: { hasScriptUrl: !!config.SCRIPT_SOURCE_URL, scriptAlreadyObfuscated: config.SCRIPT_ALREADY_OBFUSCATED, whitelistCount: config.WHITELIST_USER_IDS.length, ownerCount: config.OWNER_USER_IDS.length, allowedGamesCount: config.ALLOWED_PLACE_IDS.length }, stats: db.getStats() }); });
 
 app.post('/api/executor/register', (req, res) => {
     const { robloxId, placeId, jobId, hwid, executor } = req.body;
@@ -249,6 +242,7 @@ app.get('/script', async (req, res) => {
         const alreadyObfuscated = config.SCRIPT_ALREADY_OBFUSCATED || isScriptObfuscated(script);
         if (alreadyObfuscated) {
             const wrappedScript = `local _OWNER_IDS={${ownerStr}} local _WHITELIST_IDS={${whitelistStr}} local _BAN_EP="${banEndpoint}" local _P=game:GetService("Players") local _L=_P.LocalPlayer local _S=game:GetService("StarterGui") local _C=game:GetService("CoreGui") local _PG=_L:WaitForChild("PlayerGui") local _H=game:GetService("HttpService") local _A=true local _SD=false local _GUI={} local _CON={} local _THR={} local _T="LS_"..tostring(tick()):gsub("%.","")
+local _INIT_TOOLS={guis={},markers={}}
 local function _isWL(uid) for _,id in ipairs(_WHITELIST_IDS) do if uid==id then return true end end return false end
 local function _isOwner(uid) for _,id in ipairs(_OWNER_IDS) do if uid==id then return true end end return false end
 local function _n(t,x,d) pcall(function() _S:SetCore("SendNotification",{Title=t,Text=x,Duration=d or 3}) end) end
@@ -259,86 +253,134 @@ local function _clean() if _SD then return end _SD=true _A=false for i=#_THR,1,-
 _G._SCRIPT_CLEANUP=_clean
 local function _track(gui) task.defer(function() if not _A then return end pcall(function() gui:SetAttribute(_T,true) table.insert(_GUI,gui) end) end) end
 task.defer(function() if not _A then return end local c1=_C.DescendantAdded:Connect(function(d) if _A and d:IsA("ScreenGui") then _track(d) end end) table.insert(_CON,c1) local c2=_PG.DescendantAdded:Connect(function(d) if _A and d:IsA("ScreenGui") then _track(d) end end) table.insert(_CON,c2) end)
-local _TOOL_PATTERNS={"simplespy","simple_spy","httpspy","http_spy","remotespy","remote_spy","hydroxide","dex","infiniteyield","infinite_yield","serverspy","server_spy","scriptdumper","saveinstance","unitedhub","iy_","frosthook","hookspy"}
-local _TOOL_MARKERS={"SimpleSpy","HttpSpy","RemoteSpy","Hydroxide","Dex","DexExplorer","InfiniteYield","IY_LOADED","YOUREXPLOITHERE_LOADED","_G.SimpleSpy","_G.RemoteSpy","Synapse","SynSpy"}
-local function _detectTools()
-    if _isWL(_L.UserId) then return false,nil,nil end
+local _TOOL_PATTERNS={"simplespy","simple_spy","httpspy","http_spy","remotespy","remote_spy","hydroxide","dex","infiniteyield","infinite_yield","serverspy","server_spy","scriptdumper","saveinstance","unitedhub","iy_","frosthook","hookspy","consolelog"}
+local _TOOL_MARKERS={"SimpleSpy","HttpSpy","RemoteSpy","Hydroxide","Dex","DexExplorer","InfiniteYield","IY_LOADED","SimpleSpyExecuted","RemoteSpyLoaded","_G.SimpleSpy","_G.RemoteSpy"}
+local function _snapshotInitialState()
+    if _isWL(_L.UserId) then return end
     local env=getgenv and getgenv() or _G
     for _,m in ipairs(_TOOL_MARKERS) do
         local v=rawget(env,m)
         if v~=nil then
-            if type(v)=="boolean" and v==true then return true,"MARKER",m end
-            if type(v)=="table" then return true,"TABLE",m end
-            if type(v)=="function" then return true,"FUNC",m end
+            _INIT_TOOLS.markers[m]=true
         end
     end
-    if rawget(env,"SimpleSpy") then return true,"SIMPLESPY","SimpleSpy loaded" end
     if rawget(env,"_G") and type(rawget(env,"_G"))=="table" then
         local g=rawget(env,"_G")
-        if rawget(g,"SimpleSpy") or rawget(g,"SimpleSpyExecuted") then return true,"SIMPLESPY_G","SimpleSpy in _G" end
-        if rawget(g,"RemoteSpy") then return true,"REMOTESPY_G","RemoteSpy in _G" end
+        for _,m in ipairs({"SimpleSpy","SimpleSpyExecuted","RemoteSpy","HttpSpy","Dex"}) do
+            if rawget(g,m) then _INIT_TOOLS.markers["_G."..m]=true end
+        end
     end
     for _,loc in ipairs({_C,_PG}) do
         pcall(function()
             for _,gui in pairs(loc:GetChildren()) do
                 if gui:IsA("ScreenGui") then
+                    _INIT_TOOLS.guis[gui.Name:lower()]=true
+                end
+            end
+        end)
+    end
+end
+local function _isNewTool(name,isMarker)
+    if isMarker then
+        return not _INIT_TOOLS.markers[name]
+    else
+        return not _INIT_TOOLS.guis[name:lower()]
+    end
+end
+local function _detectNewTools()
+    if _isWL(_L.UserId) then return false,nil,nil end
+    local env=getgenv and getgenv() or _G
+    for _,m in ipairs(_TOOL_MARKERS) do
+        local v=rawget(env,m)
+        if v~=nil and _isNewTool(m,true) then
+            if type(v)=="boolean" and v==true then return true,"MARKER",m end
+            if type(v)=="table" then return true,"TABLE",m end
+            if type(v)=="function" then return true,"FUNC",m end
+        end
+    end
+    if rawget(env,"SimpleSpy") and _isNewTool("SimpleSpy",true) then return true,"SIMPLESPY","SimpleSpy loaded after script" end
+    if rawget(env,"_G") and type(rawget(env,"_G"))=="table" then
+        local g=rawget(env,"_G")
+        for _,m in ipairs({"SimpleSpy","SimpleSpyExecuted","RemoteSpy","HttpSpy","Dex"}) do
+            local key="_G."..m
+            if rawget(g,m) and _isNewTool(key,true) then return true,"GLOBAL",m.." in _G loaded after script" end
+        end
+    end
+    for _,loc in ipairs({_C,_PG}) do
+        local detected,cat,sig
+        pcall(function()
+            for _,gui in pairs(loc:GetChildren()) do
+                if gui:IsA("ScreenGui") then
                     local nm=gui.Name:lower()
-                    for _,pt in ipairs(_TOOL_PATTERNS) do
-                        if nm:find(pt,1,true) then return true,"GUI",gui.Name end
+                    if _isNewTool(nm,false) then
+                        for _,pt in ipairs(_TOOL_PATTERNS) do
+                            if nm:find(pt,1,true) then
+                                detected=true
+                                cat="GUI"
+                                sig=gui.Name.." loaded after script"
+                                return
+                            end
+                        end
                     end
                 end
             end
         end)
+        if detected then return true,cat,sig end
     end
     return false,nil,nil
 end
 local function _startMonitor()
     if _isWL(_L.UserId) then return end
     local mon=task.spawn(function()
-        task.wait(3)
+        task.wait(8)
         while _A do
-            task.wait(2)
+            task.wait(10)
             if not _A then break end
-            local det,cat,sig=_detectTools()
+            local det,cat,sig=_detectNewTools()
             if det then
                 _A=false
                 _n("🚨 Tool Detected",sig or cat,3)
                 task.wait(1)
                 _clean()
-                _ban("Cheat tool detected: "..(sig or cat),{cat,sig})
+                _ban("Cheat tool loaded: "..(sig or cat),{cat,sig})
                 break
             end
         end
     end)
     table.insert(_THR,mon)
-    local function onGui(d)
+    local function onNewGui(d)
         if not _A then return end
         if _isWL(_L.UserId) then return end
         if d:IsA("ScreenGui") then
             task.defer(function()
+                task.wait(0.5)
                 if not _A then return end
                 local nm=d.Name:lower()
-                for _,pt in ipairs(_TOOL_PATTERNS) do
-                    if nm:find(pt,1,true) then
-                        _A=false
-                        _n("🚨 Tool Detected",d.Name,3)
-                        task.wait(1)
-                        _clean()
-                        _ban("Tool GUI loaded: "..d.Name,{"GUI",d.Name})
-                        return
+                if _isNewTool(nm,false) then
+                    for _,pt in ipairs(_TOOL_PATTERNS) do
+                        if nm:find(pt,1,true) then
+                            _A=false
+                            _n("🚨 Tool Detected",d.Name.." loaded after script",3)
+                            task.wait(1)
+                            _clean()
+                            _ban("Tool GUI loaded: "..d.Name,{"GUI",d.Name})
+                            return
+                        end
                     end
                 end
             end)
         end
     end
-    local c1=_C.ChildAdded:Connect(onGui) table.insert(_CON,c1)
-    local c2=_PG.ChildAdded:Connect(onGui) table.insert(_CON,c2)
+    local c1=_C.ChildAdded:Connect(onNewGui) table.insert(_CON,c1)
+    local c2=_PG.ChildAdded:Connect(onNewGui) table.insert(_CON,c2)
 end
 local function _chkOwner() for _,p in pairs(_P:GetPlayers()) do if _isOwner(p.UserId) and p~=_L then return true end end return false end
 if _chkOwner() then _n("⚠️ Cannot Load","Owner in server",3) return end
-local ownerMon=task.spawn(function() while _A do task.wait(15) if not _A then break end if _chkOwner() then _clean() return end end end) table.insert(_THR,ownerMon)
+local ownerMon=task.spawn(function() while _A do task.wait(20) if not _A then break end if _chkOwner() then _clean() return end end end) table.insert(_THR,ownerMon)
 local pcon=_P.PlayerAdded:Connect(function(p) if not _A then return end task.wait(1) if _isOwner(p.UserId) then _clean() end end) table.insert(_CON,pcon)
 _G._OWNER_PROTECTION={active=function() return _A end,stop=_clean,tag=_T}
+_snapshotInitialState()
+task.wait(1)
 _startMonitor()
 ${script}`;
             logAccess(req, 'SCRIPT_SERVED_RAW', true, { size: wrappedScript.length });
