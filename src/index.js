@@ -66,16 +66,28 @@ const UNAUTHORIZED_HTML = `<!DOCTYPE html>
 function generateFakeObfuscatedScript() {
     const randStr = (len) => { let r = ''; const c = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_'; for (let i = 0; i < len; i++) r += c[Math.floor(Math.random() * c.length)]; return r; };
     const randNum = () => Math.floor(Math.random() * 99999);
-    const v1 = randStr(3), v2 = randStr(4), v3 = randStr(2), v4 = randStr(5), v5 = randStr(3);
-    const t1 = randStr(6), t2 = randStr(8), t3 = randStr(5);
-    const fakeStrings = [];
-    for (let i = 0; i < 50; i++) fakeStrings.push(`"\\${randNum()}\\${randNum()}\\${randNum()}"`);
-    const fakeTable = fakeStrings.join(',');
-    return `local ${v1}=(function(${v2},${v3})local ${v4}={${fakeTable}};local ${v5}={}for ${t1}=1,#${v4}do ${v5}[${t1}]=string.char((string.byte(${v4}[${t1}],1)or 0)+(${v3}%256))end;return table.concat(${v5})end)(${randNum()},${randNum()})local ${t2}=(function()local ${t3}={${Array.from({length:30},()=>`[${randNum()}]="${randStr(10)}"`).join(',')}}return ${t3}end)()local function ${randStr(6)}(${randStr(2)})local ${randStr(3)}=${randStr(2)}or""for ${randStr(2)}=1,${randNum()}do ${randStr(3)}=${randStr(3)}..string.char(math.random(65,90))end;return ${randStr(3)}end;(function()local ${randStr(4)}={${Array.from({length:20},()=>`"${randStr(15)}"`).join(',')}}for ${randStr(2)}=1,#${randStr(4)}do pcall(function()local ${randStr(3)}=string.reverse(${randStr(4)}[${randStr(2)}])end)end end)()local ${randStr(5)}=coroutine.wrap(function()for ${randStr(2)}=1,${randNum()}do coroutine.yield(${randStr(2)}*${randNum()})end end)pcall(function()while true do local ${randStr(3)}=${randStr(5)}()if not ${randStr(3)}then break end end end)`;
+    const randHex = () => { let h = ''; for (let i = 0; i < Math.floor(Math.random() * 20) + 10; i++) h += '\\' + Math.floor(Math.random() * 255); return h; };
+    const vars = Array.from({length: 20}, () => randStr(Math.floor(Math.random() * 4) + 2));
+    const fakeStrings = Array.from({length: 100}, () => `"${randHex()}"`).join(',');
+    const fakeTable = Array.from({length: 50}, () => `[${randNum()}]="${randStr(12)}"`).join(',');
+    const fakeOps = Array.from({length: 30}, () => {
+        const ops = [
+            `${vars[Math.floor(Math.random()*vars.length)]}=${randNum()}`,
+            `${vars[Math.floor(Math.random()*vars.length)]}="${randStr(8)}"`,
+            `${vars[Math.floor(Math.random()*vars.length)]}=bit32.bxor(${randNum()},${randNum()})`,
+            `${vars[Math.floor(Math.random()*vars.length)]}=string.char(${Math.floor(Math.random()*90)+32})`,
+            `${vars[Math.floor(Math.random()*vars.length)]}=math.floor(${randNum()}/${randNum()+1})`
+        ];
+        return ops[Math.floor(Math.random()*ops.length)];
+    }).join(';');
+    return `local ${vars[0]}=(function()local ${vars[1]}={${fakeStrings}};local ${vars[2]}={${fakeTable}};local ${vars[3]}=0;for ${vars[4]}=1,#${vars[1]} do ${vars[3]}=${vars[3]}+(string.byte(${vars[1]}[${vars[4]}],1)or 0)end;return ${vars[3]} end)();local ${vars[5]}=coroutine.wrap(function()${fakeOps};for ${vars[6]}=1,${randNum()} do coroutine.yield(${vars[6]}*${randNum()})end end);(function()local ${vars[7]}={};for ${vars[8]}=1,math.random(100,500)do ${vars[7]}[${vars[8]}]=string.rep("${randStr(5)}",math.random(1,10))end;for ${vars[9]},${vars[10]} in pairs(${vars[7]})do local ${vars[11]}=string.reverse(${vars[10]})end end)();local ${vars[12]}=function(${vars[13]})local ${vars[14]}=${vars[13]} or 0;for ${vars[15]}=1,${randNum()} do ${vars[14]}=${vars[14]}+math.sin(${vars[15]})end;return ${vars[14]} end;pcall(function()while true do local ${vars[16]}=${vars[5]}()if not ${vars[16]} then break end;${vars[12]}(${vars[16]})end end);local ${vars[17]}=setmetatable({${fakeTable}},{__index=function(${vars[18]},${vars[19]})return rawget(${vars[18]},${vars[19]})or"${randStr(20)}"end});`;
 }
 
+const validExecutorTokens = new Map();
+setInterval(() => { const now = Date.now(); for (const [k, v] of validExecutorTokens.entries()) { if (now - v.created > 300000) validExecutorTokens.delete(k); } }, 60000);
+
 app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false, crossOriginResourcePolicy: false }));
-app.use(cors({ origin: '*', methods: ['GET', 'POST', 'DELETE', 'PUT', 'PATCH'], allowedHeaders: ['Content-Type', 'x-admin-key', 'Authorization', 'x-hwid', 'x-player-id'] }));
+app.use(cors({ origin: '*', methods: ['GET', 'POST', 'DELETE', 'PUT', 'PATCH'], allowedHeaders: ['Content-Type', 'x-admin-key', 'Authorization', 'x-hwid', 'x-player-id', 'x-executor-token', 'x-roblox-id', 'x-place-id', 'x-job-id'] }));
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 app.set('trust proxy', 1);
@@ -93,36 +105,60 @@ function getHWID(req) { return req.headers['x-hwid'] || req.query.hwid || req.bo
 function getPlayerID(req) { return req.headers['x-player-id'] || req.query.pid || req.body?.playerId || null; }
 function logAccess(req, action, success, details = {}) { const log = { ip: getClientIP(req), hwid: getHWID(req), playerId: getPlayerID(req), userAgent: req.headers['user-agent']?.substring(0, 100) || 'unknown', action, success, method: req.method, path: req.path, timestamp: new Date().toISOString(), ...details }; db.addLog(log); return log; }
 
-function isBot(req) {
-    const ua = (req.headers['user-agent'] || '').toLowerCase();
-    const botPatterns = ['bot', 'crawler', 'spider', 'scraper', 'python', 'node-fetch', 'axios', 'got', 'request', 'urllib', 'curl', 'wget', 'postman', 'insomnia', 'httpie', 'discord', 'telegram', 'slack', 'crypta', 'mee6', 'dyno', 'carl', 'http-client', 'java/', 'okhttp', 'libwww', 'apache', 'ruby', 'perl', 'php/', 'go-http'];
-    for (const p of botPatterns) { if (ua.includes(p)) return true; }
-    if (!ua || ua.length < 5) return true;
-    const accept = req.headers['accept'] || '';
-    const acceptLang = req.headers['accept-language'] || '';
-    if (acceptLang && (accept.includes('text/html') || accept.includes('application/xhtml'))) {
-        const browsers = ['mozilla', 'chrome', 'safari', 'firefox', 'edge', 'opera'];
-        if (browsers.some(b => ua.includes(b))) return true;
-    }
-    if (req.headers['sec-fetch-dest'] || req.headers['sec-fetch-mode'] || req.headers['sec-ch-ua']) return true;
-    if (req.headers['referer'] || req.headers['origin']) return true;
-    return false;
+function isBrowser(req) { 
+    const accept = req.headers['accept'] || ''; 
+    const ua = (req.headers['user-agent'] || '').toLowerCase(); 
+    const executors = ['roblox','synapse','krnl','fluxus','delta','electron','script-ware','sentinel','coco','oxygen','evon','arceus','hydrogen','vegax','trigon','comet','jjsploit','wearedevs','executor','exploit','wininet','solara','wave','zorara','codex','nihon','celery','swift','scriptware','sirhurt','temple','valyse']; 
+    if (executors.some(k => ua.includes(k))) return false; 
+    if (accept.includes('text/html') && (ua.includes('mozilla') || ua.includes('chrome') || ua.includes('safari') || ua.includes('firefox')) && req.headers['accept-language']) return true; 
+    return false; 
 }
 
-function isBrowser(req) { const accept = req.headers['accept'] || ''; const ua = (req.headers['user-agent'] || '').toLowerCase(); const executors = ['roblox','synapse','krnl','fluxus','delta','electron','script-ware','sentinel','coco','oxygen','evon','arceus','hydrogen','vegax','trigon','comet','jjsploit','wearedevs','executor','exploit','wininet','solara','wave','zorara','codex','nihon','celery','swift','scriptware','sirhurt','temple','valyse']; if (executors.some(k => ua.includes(k))) return false; if (accept.includes('text/html') && (ua.includes('mozilla') || ua.includes('chrome') || ua.includes('safari') || ua.includes('firefox')) && req.headers['accept-language']) return true; return false; }
+function isLikelyBot(req) {
+    const ua = (req.headers['user-agent'] || '').toLowerCase();
+    const ip = getClientIP(req);
+    const hasRobloxHeaders = req.headers['x-roblox-id'] && req.headers['x-place-id'] && req.headers['x-job-id'];
+    const hasExecutorToken = req.headers['x-executor-token'] && validExecutorTokens.has(req.headers['x-executor-token']);
+    if (hasRobloxHeaders || hasExecutorToken) return false;
+    const botIndicators = [
+        !ua || ua.length < 10,
+        req.headers['accept-language'] && req.headers['accept']?.includes('text/html'),
+        req.headers['sec-fetch-dest'] || req.headers['sec-fetch-mode'] || req.headers['sec-ch-ua'],
+        req.headers['referer'] || req.headers['origin'],
+        req.headers['cookie'],
+        /bot|crawler|spider|scraper|python|node|axios|got|request|urllib|curl|wget|postman|insomnia|httpie|discord|telegram|slack|crypta|mee6|dyno|http-client|java\/|okhttp|libwww|apache|ruby|perl|php\/|go-http|fetcher|monitor|check|scan|probe/i.test(ua),
+        ua.includes('mozilla') && ua.includes('chrome') && !ua.includes('roblox'),
+    ];
+    return botIndicators.filter(Boolean).length >= 1;
+}
+
 function secureCompare(a, b) { if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false; try { return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b)); } catch { return false; } }
 function isScriptObfuscated(script) { if (!script || typeof script !== 'string') return false; const patterns = [/IronBrew/i, /Prometheus/i, /Moonsec/i, /Luraph/i, /PSU|PaidScriptUploader/i, /Aztup/i, /Synapse Xen/i, /-- Obfuscated/i, /-- Protected/i]; for (const p of patterns) if (p.test(script.substring(0, 500))) return true; const code = [/^local \w{1,3}=\{/, /getfenv\s*\(\s*\d+\s*\)/, /string\.char\s*\(\s*\d+/, /loadstring\s*\(\s*['"]\\x/, /\[\[.{100,}\]\]/]; for (const p of code) if (p.test(script)) return true; if ((script.match(/\\\d{1,3}/g) || []).length > 100 && script.length > 2000) return true; for (const line of script.split('\n')) if (line.length > 10000) return true; if ((script.match(/[a-zA-Z]/g) || []).length / script.length < 0.3 && script.length > 1000) return true; return false; }
 function isDeviceBlocked(req) { return blockedDevices.isBlocked(getHWID(req), getClientIP(req), getPlayerID(req)); }
 
 async function verifyRobloxUser(userId) { try { const r = await axios.get(`https://users.roblox.com/v1/users/${userId}`, { timeout: 5000 }); if (r.data?.id) return { valid: true, id: r.data.id, username: r.data.name, displayName: r.data.displayName }; return { valid: false }; } catch { return { valid: true, fallback: true }; } }
 
-app.get('/', (req, res) => { if (isBrowser(req)) return res.status(403).type('text/html').send(UNAUTHORIZED_HTML); if (isBot(req)) { logAccess(req, 'BOT_BLOCKED', false); return res.type('text/plain').send(generateFakeObfuscatedScript()); } res.json({ status: "online", version: "5.4.3", protected: true }); });
+app.get('/', (req, res) => { 
+    if (isBrowser(req)) return res.status(403).type('text/html').send(UNAUTHORIZED_HTML); 
+    if (isLikelyBot(req)) { logAccess(req, 'BOT_BLOCKED_ROOT', false); return res.type('text/plain').send(generateFakeObfuscatedScript()); } 
+    res.json({ status: "online", version: "5.4.4", protected: true }); 
+});
 app.get('/health', (req, res) => { res.json({ status: "ok", uptime: Math.floor(process.uptime()) }); });
 app.get('/api/health', (req, res) => { if (isBrowser(req)) return res.status(403).type('text/html').send(UNAUTHORIZED_HTML); res.json({ status: "healthy", cached: scriptCache.has('main_script'), stats: db.getStats() }); });
-app.get('/debug', (req, res) => { res.json({ status: "ok", version: "5.4.3", config: { hasScriptUrl: !!config.SCRIPT_SOURCE_URL, scriptAlreadyObfuscated: config.SCRIPT_ALREADY_OBFUSCATED, whitelistCount: config.WHITELIST_USER_IDS.length, ownerCount: config.OWNER_USER_IDS.length, allowedGamesCount: config.ALLOWED_PLACE_IDS.length }, stats: db.getStats() }); });
+app.get('/debug', (req, res) => { res.json({ status: "ok", version: "5.4.4", config: { hasScriptUrl: !!config.SCRIPT_SOURCE_URL, scriptAlreadyObfuscated: config.SCRIPT_ALREADY_OBFUSCATED, whitelistCount: config.WHITELIST_USER_IDS.length, ownerCount: config.OWNER_USER_IDS.length, allowedGamesCount: config.ALLOWED_PLACE_IDS.length }, stats: db.getStats() }); });
+
+app.post('/api/executor/register', (req, res) => {
+    const { robloxId, placeId, jobId, hwid, executor } = req.body;
+    if (!robloxId || !placeId || !jobId) return res.status(400).json({ success: false, error: "Missing fields" });
+    const token = crypto.randomBytes(32).toString('hex');
+    validExecutorTokens.set(token, { robloxId, placeId, jobId, hwid, executor, ip: getClientIP(req), created: Date.now() });
+    logAccess(req, 'EXECUTOR_REGISTERED', true, { robloxId, placeId });
+    res.json({ success: true, token, expiresIn: 300 });
+});
 
 app.post('/api/auth/challenge', async (req, res) => {
     if (isBrowser(req)) return res.status(403).json({ success: false, error: "Forbidden" });
+    if (isLikelyBot(req) && !req.headers['x-executor-token']) { logAccess(req, 'BOT_CHALLENGE_BLOCKED', false); return res.status(403).json({ success: false, error: "Invalid client" }); }
     try {
         const { userId, hwid, placeId } = req.body;
         if (!userId || !hwid || !placeId) return res.status(400).json({ success: false, error: "Missing required fields" });
@@ -139,6 +175,7 @@ app.post('/api/auth/challenge', async (req, res) => {
 
 app.post('/api/auth/verify', async (req, res) => {
     if (isBrowser(req)) return res.status(403).json({ success: false, error: "Forbidden" });
+    if (isLikelyBot(req) && !req.headers['x-executor-token']) { logAccess(req, 'BOT_VERIFY_BLOCKED', false); return res.status(403).json({ success: false, error: "Invalid client" }); }
     try {
         const { challengeId, solution, timestamp } = req.body;
         if (!challengeId || solution === undefined || !timestamp) return res.status(400).json({ success: false, error: "Missing fields" });
@@ -172,15 +209,21 @@ app.post('/api/auth/verify', async (req, res) => {
 
 const loaderHandler = (req, res) => {
     if (isBrowser(req)) return res.status(403).type('text/html').send(UNAUTHORIZED_HTML);
-    if (isBot(req)) { logAccess(req, 'BOT_FAKE_SCRIPT', false); return res.type('text/plain').send(generateFakeObfuscatedScript()); }
+    if (isLikelyBot(req)) { 
+        logAccess(req, 'BOT_FAKE_LOADER', false, { ua: req.headers['user-agent'] }); 
+        return res.type('text/plain').send(generateFakeObfuscatedScript()); 
+    }
     const serverUrl = process.env.RENDER_EXTERNAL_URL || process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
     const loaderScript = `local SERVER="${serverUrl}" local HttpService=game:GetService("HttpService") local Players=game:GetService("Players") local StarterGui=game:GetService("StarterGui") local CoreGui=game:GetService("CoreGui") local LocalPlayer=Players.LocalPlayer local _ACTIVE=true
 local function notify(t,x,d) pcall(function() StarterGui:SetCore("SendNotification",{Title=t,Text=x,Duration=d or 3}) end) end
 local function getHWID() local s,r=pcall(function() if gethwid then return gethwid() end if get_hwid then return get_hwid() end if getexecutorname then return getexecutorname().."_"..tostring(LocalPlayer.UserId) end return "FB_"..tostring(LocalPlayer.UserId) end) return s and r or "UNK" end
-local function httpPost(url,data) local req=(syn and syn.request) or request or http_request or (http and http.request) if not req then return nil,"No HTTP" end local s,r=pcall(function() return req({Url=url,Method="POST",Headers={["Content-Type"]="application/json",["User-Agent"]="RobloxExecutor/5.4"},Body=HttpService:JSONEncode(data)}) end) if not s then return nil,tostring(r) end if r.StatusCode~=200 then local e=nil pcall(function() e=HttpService:JSONDecode(r.Body) end) return e,"HTTP "..r.StatusCode end local ps,pd=pcall(function() return HttpService:JSONDecode(r.Body) end) return ps and pd or nil end
+local function getExecutorName() local s,r=pcall(function() if identifyexecutor then local n,v=identifyexecutor() return n or "Unknown" end if getexecutorname then return getexecutorname() end return "Unknown" end) return s and r or "Unknown" end
+local function httpPost(url,data,headers) local req=(syn and syn.request) or request or http_request or (http and http.request) if not req then return nil,"No HTTP" end local h=headers or {} h["Content-Type"]="application/json" h["User-Agent"]="RobloxExecutor/5.4" local s,r=pcall(function() return req({Url=url,Method="POST",Headers=h,Body=HttpService:JSONEncode(data)}) end) if not s then return nil,tostring(r) end if r.StatusCode~=200 then local e=nil pcall(function() e=HttpService:JSONDecode(r.Body) end) return e,"HTTP "..r.StatusCode end local ps,pd=pcall(function() return HttpService:JSONDecode(r.Body) end) return ps and pd or nil end
 local function xorDecrypt(d,k) local r={} for i=1,#d do r[i]=string.char(bit32.bxor(d[i],string.byte(k,((i-1)%#k)+1))) end return table.concat(r) end
+local _EXEC_TOKEN=nil
+local function registerExecutor() local regData={robloxId=LocalPlayer.UserId,placeId=game.PlaceId,jobId=game.JobId,hwid=getHWID(),executor=getExecutorName()} local result=httpPost(SERVER.."/api/executor/register",regData) if result and result.success then _EXEC_TOKEN=result.token return true end return false end
 local function setupOwnerProtection(oIds) if not oIds or #oIds==0 then return true end local function isOwner(uid) for _,id in ipairs(oIds) do if uid==id then return true end end return false end local function checkOwner() for _,p in pairs(Players:GetPlayers()) do if isOwner(p.UserId) and p~=LocalPlayer then return true,p.Name end end return false,nil end local op,on=checkOwner() if op then notify("⚠️ Cannot Load","Owner ("..on..") in server",5) return false end task.spawn(function() while _ACTIVE and task.wait(15) do local pr,nm=checkOwner() if pr then _ACTIVE=false if _G._SCRIPT_CLEANUP then pcall(_G._SCRIPT_CLEANUP) end notify("⚠️ Script Stopped","Owner ("..nm..") detected",3) break end end end) Players.PlayerAdded:Connect(function(p) task.wait(1) if _ACTIVE and isOwner(p.UserId) then _ACTIVE=false if _G._SCRIPT_CLEANUP then pcall(_G._SCRIPT_CLEANUP) end notify("⚠️ Script Stopped","Owner ("..p.Name..") joined",3) end end) return true end
-local function main() notify("🔄 Loading","Connecting...",2) local cData,e1=httpPost(SERVER.."/api/auth/challenge",{userId=LocalPlayer.UserId,hwid=getHWID(),placeId=game.PlaceId}) if not cData then notify("❌ Error","Connection failed",5) return false end if not cData.success then notify("❌ Denied",cData.error or "Error",5) if cData.error and cData.error:find("Banned") then task.wait(2) LocalPlayer:Kick("⛔ Banned") end return false end local puzzle=cData.puzzle local solution=0 if puzzle and puzzle.numbers then for _,n in ipairs(puzzle.numbers) do solution=solution+n end end notify("🔄 Loading","Verifying...",2) local vData,e2=httpPost(SERVER.."/api/auth/verify",{challengeId=cData.challengeId,solution=solution,timestamp=os.time()}) if not vData or not vData.success then notify("❌ Error",vData and vData.error or "Verify failed",5) return false end notify("✅ Verified","Loading script...",2) local canRun=setupOwnerProtection(vData.ownerIds) if not canRun then return false end local fullScript if vData.mode=="raw" then fullScript=vData.script else local parts={} for i,chunk in ipairs(vData.chunks) do parts[i]=xorDecrypt(chunk,vData.key) end fullScript=table.concat(parts) end local fn,err=loadstring(fullScript) if fn then pcall(fn) return true end return false end
+local function main() registerExecutor() notify("🔄 Loading","Connecting...",2) local authHeaders={} if _EXEC_TOKEN then authHeaders["x-executor-token"]=_EXEC_TOKEN end authHeaders["x-roblox-id"]=tostring(LocalPlayer.UserId) authHeaders["x-place-id"]=tostring(game.PlaceId) authHeaders["x-job-id"]=game.JobId local cData,e1=httpPost(SERVER.."/api/auth/challenge",{userId=LocalPlayer.UserId,hwid=getHWID(),placeId=game.PlaceId},authHeaders) if not cData then notify("❌ Error","Connection failed",5) return false end if not cData.success then notify("❌ Denied",cData.error or "Error",5) if cData.error and cData.error:find("Banned") then task.wait(2) LocalPlayer:Kick("⛔ Banned") end return false end local puzzle=cData.puzzle local solution=0 if puzzle and puzzle.numbers then for _,n in ipairs(puzzle.numbers) do solution=solution+n end end notify("🔄 Loading","Verifying...",2) local vData,e2=httpPost(SERVER.."/api/auth/verify",{challengeId=cData.challengeId,solution=solution,timestamp=os.time()},authHeaders) if not vData or not vData.success then notify("❌ Error",vData and vData.error or "Verify failed",5) return false end notify("✅ Verified","Loading script...",2) local canRun=setupOwnerProtection(vData.ownerIds) if not canRun then return false end local fullScript if vData.mode=="raw" then fullScript=vData.script else local parts={} for i,chunk in ipairs(vData.chunks) do parts[i]=xorDecrypt(chunk,vData.key) end fullScript=table.concat(parts) end local fn,err=loadstring(fullScript) if fn then pcall(fn) return true end return false end
 pcall(main)`;
     logAccess(req, 'LOADER_SERVED', true, { size: loaderScript.length });
     res.type('text/plain').send(loaderScript);
@@ -191,7 +234,7 @@ app.get('/loader', loaderHandler);
 
 app.get('/script', async (req, res) => {
     if (isBrowser(req)) return res.status(403).type('text/html').send(UNAUTHORIZED_HTML);
-    if (isBot(req)) { logAccess(req, 'BOT_FAKE_SCRIPT', false); return res.type('text/plain').send(generateFakeObfuscatedScript()); }
+    if (isLikelyBot(req)) { logAccess(req, 'BOT_FAKE_SCRIPT', false, { ua: req.headers['user-agent'] }); return res.type('text/plain').send(generateFakeObfuscatedScript()); }
     const playerIdHeader = getPlayerID(req), hwidHeader = getHWID(req);
     const blockInfo = isDeviceBlocked(req); 
     if (blockInfo.blocked) return res.type('text/plain').send(`game:GetService("Players").LocalPlayer:Kick("⛔ Banned\\n\\nReason: ${blockInfo.reason}\\nBan ID: ${blockInfo.banId}")`);
@@ -216,8 +259,8 @@ local function _clean() if _SD then return end _SD=true _A=false for i=#_THR,1,-
 _G._SCRIPT_CLEANUP=_clean
 local function _track(gui) task.defer(function() if not _A then return end pcall(function() gui:SetAttribute(_T,true) table.insert(_GUI,gui) end) end) end
 task.defer(function() if not _A then return end local c1=_C.DescendantAdded:Connect(function(d) if _A and d:IsA("ScreenGui") then _track(d) end end) table.insert(_CON,c1) local c2=_PG.DescendantAdded:Connect(function(d) if _A and d:IsA("ScreenGui") then _track(d) end end) table.insert(_CON,c2) end)
-local _TOOL_PATTERNS={"simplespy","simple_spy","httpspy","http_spy","remotespy","remote_spy","hydroxide","dex","infiniteyield","infinite_yield","serverspy","server_spy","scriptdumper","saveinstance","unitedhub","iy_"}
-local _TOOL_MARKERS={"SimpleSpy","HttpSpy","RemoteSpy","Hydroxide","Dex","DexExplorer","InfiniteYield","IY_LOADED","YOUREXPLOITHERE_LOADED"}
+local _TOOL_PATTERNS={"simplespy","simple_spy","httpspy","http_spy","remotespy","remote_spy","hydroxide","dex","infiniteyield","infinite_yield","serverspy","server_spy","scriptdumper","saveinstance","unitedhub","iy_","frosthook","hookspy"}
+local _TOOL_MARKERS={"SimpleSpy","HttpSpy","RemoteSpy","Hydroxide","Dex","DexExplorer","InfiniteYield","IY_LOADED","YOUREXPLOITHERE_LOADED","_G.SimpleSpy","_G.RemoteSpy","Synapse","SynSpy"}
 local function _detectTools()
     if _isWL(_L.UserId) then return false,nil,nil end
     local env=getgenv and getgenv() or _G
@@ -236,43 +279,12 @@ local function _detectTools()
         if rawget(g,"RemoteSpy") then return true,"REMOTESPY_G","RemoteSpy in _G" end
     end
     for _,loc in ipairs({_C,_PG}) do
-        local ok,err=pcall(function()
+        pcall(function()
             for _,gui in pairs(loc:GetChildren()) do
                 if gui:IsA("ScreenGui") then
                     local nm=gui.Name:lower()
                     for _,pt in ipairs(_TOOL_PATTERNS) do
                         if nm:find(pt,1,true) then return true,"GUI",gui.Name end
-                    end
-                    local function scanDesc(parent)
-                        for _,child in pairs(parent:GetChildren()) do
-                            if child:IsA("TextLabel") or child:IsA("TextButton") then
-                                local txt=(child.Text or ""):lower()
-                                if txt:find("simplespy") or txt:find("remote spy") or txt:find("http spy") or txt:find("hydroxide") or txt:find("infinite yield") then
-                                    return true,"TEXT",child.Text
-                                end
-                            end
-                            local found,cat,sig=scanDesc(child)
-                            if found then return found,cat,sig end
-                        end
-                        return false,nil,nil
-                    end
-                    local f,c,s=scanDesc(gui)
-                    if f then return f,c,s end
-                end
-            end
-        end)
-        if ok and err then return true,"GUI_SCAN","Tool GUI detected" end
-    end
-    local hookedFuncs={"FireServer","InvokeServer","Fire","Invoke"}
-    for _,fn in ipairs(hookedFuncs) do
-        pcall(function()
-            local mt=getrawmetatable and getrawmetatable(game) or nil
-            if mt then
-                local nc=rawget(mt,"__namecall")
-                if nc and type(nc)=="function" then
-                    local info=debug.getinfo and debug.getinfo(nc)
-                    if info and info.source and (info.source:find("spy") or info.source:find("log")) then
-                        return true,"HOOK","Namecall hooked"
                     end
                 end
             end
@@ -354,7 +366,7 @@ app.post('/api/ban', (req, res) => {
 
 function adminAuth(req, res, next) { const k = req.headers['x-admin-key'] || req.query.key; if (!k) return res.status(401).json({ error: "Admin key required" }); if (!secureCompare(k, config.ADMIN_KEY)) return res.status(403).json({ error: "Invalid admin key" }); next(); }
 
-app.get('/api/admin/stats', adminAuth, (req, res) => { res.json({ success: true, stats: db.getStats(), config: { hasScriptUrl: !!config.SCRIPT_SOURCE_URL, scriptAlreadyObfuscated: config.SCRIPT_ALREADY_OBFUSCATED, whitelistCount: config.WHITELIST_USER_IDS.length, ownerCount: config.OWNER_USER_IDS.length }, server: { uptime: Math.floor(process.uptime()) + 's', memory: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB' } }); });
+app.get('/api/admin/stats', adminAuth, (req, res) => { res.json({ success: true, stats: db.getStats(), config: { hasScriptUrl: !!config.SCRIPT_SOURCE_URL, scriptAlreadyObfuscated: config.SCRIPT_ALREADY_OBFUSCATED, whitelistCount: config.WHITELIST_USER_IDS.length, ownerCount: config.OWNER_USER_IDS.length }, server: { uptime: Math.floor(process.uptime()) + 's', memory: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB', executorTokens: validExecutorTokens.size } }); });
 app.get('/api/admin/logs', adminAuth, (req, res) => { const limit = Math.min(parseInt(req.query.limit) || 50, 500); let logs = db.getLogs(limit); if (req.query.filter) logs = logs.filter(l => l.action?.includes(req.query.filter.toUpperCase())); res.json({ success: true, count: logs.length, logs }); });
 app.get('/api/admin/bans', adminAuth, (req, res) => { res.json({ success: true, count: blockedDevices.count(), bans: blockedDevices.getAll() }); });
 app.delete('/api/admin/bans/:banId', adminAuth, (req, res) => { const removed = blockedDevices.removeByBanId(req.params.banId); res.json({ success: removed, message: removed ? 'Ban removed' : 'Ban not found' }); });
@@ -365,7 +377,7 @@ app.post('/api/admin/refresh', adminAuth, async (req, res) => { try { scriptCach
 app.get('/api/admin/whitelist', adminAuth, (req, res) => { res.json({ success: true, whitelist: config.WHITELIST_USER_IDS, count: config.WHITELIST_USER_IDS.length }); });
 app.get('/api/admin/user/:userId', adminAuth, async (req, res) => { try { const userId = parseInt(req.params.userId); const userInfo = await verifyRobloxUser(userId); res.json({ success: true, user: { ...userInfo, isWhitelisted: config.WHITELIST_USER_IDS.includes(userId), isOwner: config.OWNER_USER_IDS.includes(userId) } }); } catch (error) { res.status(500).json({ success: false, error: error.message }); } });
 
-app.use('*', (req, res) => { if (isBrowser(req)) return res.status(404).type('text/html').send(UNAUTHORIZED_HTML); if (isBot(req)) return res.type('text/plain').send(generateFakeObfuscatedScript()); res.status(404).json({ error: "Not found" }); });
+app.use('*', (req, res) => { if (isBrowser(req)) return res.status(404).type('text/html').send(UNAUTHORIZED_HTML); if (isLikelyBot(req)) return res.type('text/plain').send(generateFakeObfuscatedScript()); res.status(404).json({ error: "Not found" }); });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {});
