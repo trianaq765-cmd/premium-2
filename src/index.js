@@ -10,6 +10,23 @@ const { generateProtectedScript, generateSessionKey } = require('./protection');
 
 const app = express();
 
+// ============================================================
+// 🔐 ANTI-SCRAPER: Session & Token Store
+// ============================================================
+const pendingTokens = new Map();  // Untuk validasi 2-step
+const validatedSessions = new Map(); // Session yang sudah tervalidasi
+
+// Cleanup expired tokens setiap 5 menit
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, data] of pendingTokens.entries()) {
+        if (now - data.created > 60000) pendingTokens.delete(key);
+    }
+    for (const [key, data] of validatedSessions.entries()) {
+        if (now - data.created > 300000) validatedSessions.delete(key);
+    }
+}, 300000);
+
 const UNAUTHORIZED_HTML = `<!DOCTYPE html>
 <html lang="id">
 <head>
@@ -63,8 +80,40 @@ const UNAUTHORIZED_HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
+// ============================================================
+// 🛡️ FAKE SCRIPT - Untuk Bot/Scraper
+// ============================================================
+const FAKE_SCRIPT = `--[[ 
+    Premium Script Loader v5.4.4
+    Protected by Advanced Anti-Tamper
+]]
+
+print("Loading...")
+task.wait(2)
+print("Initializing security checks...")
+task.wait(1)
+
+-- This is a decoy script for scrapers/bots
+-- Real script requires valid Roblox environment
+
+local function init()
+    local success, err = pcall(function()
+        game:GetService("Players").LocalPlayer:Kick("Session expired. Please re-execute.")
+    end)
+end
+
+init()`;
+
+const HONEYPOT_SCRIPT = `--[[ Protected Script ]]
+local _=[[
+ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789
+This script is protected and requires valid authentication
+Contact admin for access
+]]
+print(_)`;
+
 app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false, crossOriginResourcePolicy: false }));
-app.use(cors({ origin: '*', methods: ['GET', 'POST', 'DELETE', 'PUT', 'PATCH'], allowedHeaders: ['Content-Type', 'x-admin-key', 'Authorization', 'x-hwid', 'x-player-id', 'x-place-id', 'x-executor'] }));
+app.use(cors({ origin: '*', methods: ['GET', 'POST', 'DELETE', 'PUT', 'PATCH'], allowedHeaders: ['Content-Type', 'x-admin-key', 'Authorization', 'x-hwid', 'x-player-id', 'x-place-id', 'x-executor', 'x-roblox-token', 'x-session-token', 'x-game-data'] }));
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 app.set('trust proxy', 1);
@@ -73,8 +122,22 @@ const authLimiter = rateLimit({ windowMs: 60000, max: 20, message: { success: fa
 const generalLimiter = rateLimit({ windowMs: 60000, max: 100, message: { success: false, error: "Too many requests" }, keyGenerator: (req) => getClientIP(req) });
 const strictLimiter = rateLimit({ windowMs: 60000, max: 10, message: { success: false, error: "Rate limit exceeded" }, keyGenerator: (req) => getClientIP(req) });
 
+// Rate limiter khusus untuk loader - sangat ketat
+const loaderLimiter = rateLimit({ 
+    windowMs: 60000, 
+    max: 5, 
+    message: '--[[ Rate Limited ]]', 
+    keyGenerator: (req) => getClientIP(req),
+    handler: (req, res) => {
+        logAccess(req, 'LOADER_RATE_LIMITED', false);
+        res.type('text/plain').send(FAKE_SCRIPT);
+    }
+});
+
 app.use('/api/auth/', authLimiter);
 app.use('/api/ban', strictLimiter);
+app.use('/api/loader', loaderLimiter);
+app.use('/loader', loaderLimiter);
 app.use('/api/', generalLimiter);
 
 function getClientIP(req) { const f = req.headers['x-forwarded-for']; return f ? f.split(',')[0].trim() : req.headers['x-real-ip'] || req.connection?.remoteAddress || req.socket?.remoteAddress || req.ip || 'unknown'; }
@@ -83,56 +146,136 @@ function getPlayerID(req) { return req.headers['x-player-id'] || req.query.pid |
 function logAccess(req, action, success, details = {}) { const log = { ip: getClientIP(req), hwid: getHWID(req), playerId: getPlayerID(req), userAgent: req.headers['user-agent']?.substring(0, 100) || 'unknown', action, success, method: req.method, path: req.path, timestamp: new Date().toISOString(), ...details }; db.addLog(log); return log; }
 
 // ============================================================
-// 🛡️ ANTI-BOT: Validate User-Agent
+// 🛡️ ADVANCED ANTI-BOT DETECTION
 // ============================================================
-const BLOCKED_UA_PATTERNS = [
-    'discord', 'crypta', 'mee6', 'dyno', 'carl', 'dank',
-    'bot', 'crawler', 'spider', 'scraper',
-    'python', 'node-fetch', 'axios', 'got', 'request', 'urllib',
-    'curl', 'wget', 'postman', 'insomnia', 'httpie',
-    'mozilla', 'chrome', 'safari', 'firefox', 'edge', 'opera', 'webkit'
-];
 
-const VALID_EXECUTOR_PATTERNS = [
-    'roblox', 'wininet',
-    'synapse', 'syn',
-    'krnl',
-    'fluxus',
-    'delta',
-    'electron',
-    'script-ware', 'scriptware',
-    'sentinel',
-    'oxygen',
-    'evon',
-    'arceus',
-    'hydrogen',
-    'vegax',
-    'trigon',
-    'comet',
-    'solara',
-    'wave',
-    'zorara',
-    'codex',
-    'celery',
-    'swift',
-    'sirhurt',
-    'executor',
-    'exploit'
-];
-
-function isBlockedUA(ua) {
-    if (!ua || ua.length < 3) return { blocked: true, reason: 'empty_ua' };
-    const lowerUA = ua.toLowerCase();
-    for (const pattern of BLOCKED_UA_PATTERNS) {
-        if (lowerUA.includes(pattern)) return { blocked: true, reason: pattern };
+// Deteksi pattern request yang mencurigakan
+function detectSuspiciousRequest(req) {
+    const ua = (req.headers['user-agent'] || '').toLowerCase();
+    const accept = req.headers['accept'] || '';
+    const acceptLang = req.headers['accept-language'] || '';
+    const acceptEnc = req.headers['accept-encoding'] || '';
+    
+    const suspicionScore = {
+        score: 0,
+        reasons: []
+    };
+    
+    // 1. Browser headers tapi claim executor
+    if (acceptLang && (accept.includes('text/html') || accept.includes('application/xml'))) {
+        suspicionScore.score += 30;
+        suspicionScore.reasons.push('browser_headers');
     }
-    return { blocked: false };
+    
+    // 2. Accept header terlalu generic atau web-like
+    if (accept.includes('text/html') || accept.includes('application/xhtml')) {
+        suspicionScore.score += 25;
+        suspicionScore.reasons.push('html_accept');
+    }
+    
+    // 3. Punya accept-language (browser biasanya punya, executor tidak)
+    if (acceptLang && acceptLang.length > 0) {
+        suspicionScore.score += 20;
+        suspicionScore.reasons.push('has_accept_language');
+    }
+    
+    // 4. User-Agent pattern analysis
+    const botPatterns = [
+        /bot/i, /crawler/i, /spider/i, /scraper/i,
+        /python/i, /node/i, /axios/i, /fetch/i, /request/i,
+        /curl/i, /wget/i, /postman/i, /insomnia/i,
+        /discord/i, /telegram/i, /slack/i,
+        /http/i, /client/i
+    ];
+    
+    for (const pattern of botPatterns) {
+        if (pattern.test(ua)) {
+            suspicionScore.score += 40;
+            suspicionScore.reasons.push(`ua_pattern:${pattern.source}`);
+            break;
+        }
+    }
+    
+    // 5. Missing headers yang biasa ada di HTTP client
+    if (!req.headers['connection']) {
+        suspicionScore.score += 5;
+        suspicionScore.reasons.push('no_connection_header');
+    }
+    
+    // 6. Referer header (executor tidak punya, browser punya)
+    if (req.headers['referer'] || req.headers['origin']) {
+        suspicionScore.score += 30;
+        suspicionScore.reasons.push('has_referer_or_origin');
+    }
+    
+    // 7. Cookie header (executor tidak punya)
+    if (req.headers['cookie']) {
+        suspicionScore.score += 25;
+        suspicionScore.reasons.push('has_cookie');
+    }
+    
+    // 8. Sec- headers (browser modern punya)
+    const secHeaders = ['sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site', 'sec-ch-ua'];
+    for (const h of secHeaders) {
+        if (req.headers[h]) {
+            suspicionScore.score += 20;
+            suspicionScore.reasons.push(`has_${h}`);
+        }
+    }
+    
+    // 9. Empty atau terlalu pendek User-Agent
+    if (!ua || ua.length < 5) {
+        suspicionScore.score += 15;
+        suspicionScore.reasons.push('short_ua');
+    }
+    
+    // 10. Request timing analysis (jika terlalu cepat setelah server start)
+    const uptimeSeconds = process.uptime();
+    if (uptimeSeconds < 10) {
+        suspicionScore.score += 10;
+        suspicionScore.reasons.push('early_request');
+    }
+    
+    return suspicionScore;
 }
 
-function isValidExecutor(ua) {
-    if (!ua) return false;
-    const lowerUA = ua.toLowerCase();
-    return VALID_EXECUTOR_PATTERNS.some(p => lowerUA.includes(p));
+// Validasi apakah request kemungkinan dari Roblox executor
+function isLikelyRobloxExecutor(req) {
+    const ua = (req.headers['user-agent'] || '').toLowerCase();
+    
+    // Pattern yang HARUS ada untuk executor
+    const requiredPatterns = [
+        'roblox', 'wininet', 'win32', 'windows',
+        'synapse', 'krnl', 'fluxus', 'delta', 'electron',
+        'script-ware', 'sentinel', 'oxygen', 'evon',
+        'arceus', 'hydrogen', 'vegax', 'trigon', 'comet',
+        'solara', 'wave', 'zorara', 'codex', 'celery',
+        'swift', 'sirhurt'
+    ];
+    
+    const hasValidUA = requiredPatterns.some(p => ua.includes(p));
+    
+    // Headers yang TIDAK boleh ada
+    const forbiddenHeaders = [
+        'accept-language',  // Browser header
+        'sec-fetch-dest',   // Browser security header
+        'sec-fetch-mode',
+        'sec-ch-ua',        // Chrome UA hints
+        'referer',          // Biasanya browser
+        'origin',           // CORS header dari browser
+    ];
+    
+    for (const h of forbiddenHeaders) {
+        if (req.headers[h]) {
+            return { valid: false, reason: `forbidden_header:${h}` };
+        }
+    }
+    
+    if (!hasValidUA) {
+        return { valid: false, reason: 'invalid_ua_pattern' };
+    }
+    
+    return { valid: true };
 }
 
 function isBrowser(req) {
@@ -154,30 +297,56 @@ function isDeviceBlocked(req) { return blockedDevices.isBlocked(getHWID(req), ge
 async function verifyRobloxUser(userId) { try { const r = await axios.get(`https://users.roblox.com/v1/users/${userId}`, { timeout: 5000 }); if (r.data?.id) return { valid: true, id: r.data.id, username: r.data.name, displayName: r.data.displayName }; return { valid: false }; } catch { return { valid: true, fallback: true }; } }
 
 // ============================================================
+// 🔐 TOKEN GENERATION - Untuk 2-Step Verification
+// ============================================================
+function generateSecureToken() {
+    return crypto.randomBytes(32).toString('hex');
+}
+
+function generateTimeBasedChallenge() {
+    const timestamp = Date.now();
+    const random = crypto.randomBytes(16).toString('hex');
+    const numbers = [];
+    for (let i = 0; i < 5; i++) {
+        numbers.push(Math.floor(Math.random() * 100) + 1);
+    }
+    
+    return {
+        id: crypto.randomBytes(16).toString('hex'),
+        timestamp,
+        random,
+        puzzle: { numbers, operation: 'sum' },
+        expectedAnswer: numbers.reduce((a, b) => a + b, 0)
+    };
+}
+
+// ============================================================
 // 🌐 BASIC ENDPOINTS
 // ============================================================
 app.get('/', (req, res) => {
     if (isBrowser(req)) return res.status(403).type('text/html').send(UNAUTHORIZED_HTML);
-    const blocked = isBlockedUA(req.headers['user-agent']);
-    if (blocked.blocked) {
-        logAccess(req, 'ROOT_BOT_BLOCKED', false, { reason: blocked.reason });
+    
+    const suspicion = detectSuspiciousRequest(req);
+    if (suspicion.score >= 30) {
+        logAccess(req, 'ROOT_SUSPICIOUS', false, { score: suspicion.score, reasons: suspicion.reasons });
         return res.status(403).json({ error: "Forbidden" });
     }
-    res.json({ status: "online", version: "5.4.4", protected: true });
+    
+    res.json({ status: "online", version: "5.5.0", protected: true });
 });
 
 app.get('/health', (req, res) => { res.json({ status: "ok", uptime: Math.floor(process.uptime()) }); });
 
 app.get('/api/health', (req, res) => {
-    const blocked = isBlockedUA(req.headers['user-agent']);
-    if (blocked.blocked) return res.status(403).json({ error: "Forbidden" });
+    const suspicion = detectSuspiciousRequest(req);
+    if (suspicion.score >= 30) return res.status(403).json({ error: "Forbidden" });
     res.json({ status: "healthy", cached: scriptCache.has('main_script'), stats: db.getStats() });
 });
 
 app.get('/debug', (req, res) => {
     res.json({
         status: "ok",
-        version: "5.4.4",
+        version: "5.5.0",
         config: {
             hasScriptUrl: !!config.SCRIPT_SOURCE_URL,
             scriptAlreadyObfuscated: config.SCRIPT_ALREADY_OBFUSCATED,
@@ -190,40 +359,371 @@ app.get('/debug', (req, res) => {
 });
 
 // ============================================================
-// 🔐 AUTH ENDPOINTS
+// 🔐 NEW: STEP 1 - Initialize Session (Loader akan call ini dulu)
+// ============================================================
+app.post('/api/init', (req, res) => {
+    const suspicion = detectSuspiciousRequest(req);
+    
+    // Jika sangat mencurigakan, kirim fake response
+    if (suspicion.score >= 40) {
+        logAccess(req, 'INIT_BLOCKED_SUSPICIOUS', false, { score: suspicion.score, reasons: suspicion.reasons });
+        // Delay response untuk confuse bot
+        setTimeout(() => {
+            res.json({ 
+                success: true, 
+                token: crypto.randomBytes(32).toString('hex'),
+                challenge: { fake: true }
+            });
+        }, Math.random() * 2000 + 1000);
+        return;
+    }
+    
+    const validExecutor = isLikelyRobloxExecutor(req);
+    if (!validExecutor.valid) {
+        logAccess(req, 'INIT_INVALID_EXECUTOR', false, { reason: validExecutor.reason });
+        return res.status(403).json({ success: false, error: "Invalid client" });
+    }
+    
+    try {
+        const { robloxData } = req.body;
+        
+        // robloxData harus berisi info yang hanya bisa didapat dari dalam Roblox
+        if (!robloxData || !robloxData.userId || !robloxData.placeId || !robloxData.gameJobId) {
+            return res.status(400).json({ success: false, error: "Missing Roblox data" });
+        }
+        
+        // Generate challenge yang harus dijawab
+        const challenge = generateTimeBasedChallenge();
+        const token = generateSecureToken();
+        
+        // Simpan pending token
+        pendingTokens.set(token, {
+            challenge,
+            robloxData,
+            ip: getClientIP(req),
+            created: Date.now(),
+            hwid: getHWID(req)
+        });
+        
+        logAccess(req, 'INIT_SUCCESS', true, { userId: robloxData.userId });
+        
+        res.json({
+            success: true,
+            token,
+            challenge: {
+                id: challenge.id,
+                puzzle: challenge.puzzle,
+                timestamp: challenge.timestamp
+            },
+            expiresIn: 60
+        });
+        
+    } catch (error) {
+        res.status(500).json({ success: false, error: "Server error" });
+    }
+});
+
+// ============================================================
+// 🔐 NEW: STEP 2 - Validate & Get Script
+// ============================================================
+app.post('/api/validate', async (req, res) => {
+    const suspicion = detectSuspiciousRequest(req);
+    
+    if (suspicion.score >= 40) {
+        logAccess(req, 'VALIDATE_BLOCKED_SUSPICIOUS', false, { score: suspicion.score });
+        // Kirim fake delayed response
+        setTimeout(() => {
+            res.json({ success: true, script: FAKE_SCRIPT });
+        }, Math.random() * 3000 + 2000);
+        return;
+    }
+    
+    try {
+        const { token, solution, executorInfo } = req.body;
+        
+        if (!token || solution === undefined) {
+            return res.status(400).json({ success: false, error: "Missing fields" });
+        }
+        
+        // Cek pending token
+        const pending = pendingTokens.get(token);
+        if (!pending) {
+            logAccess(req, 'VALIDATE_INVALID_TOKEN', false);
+            return res.status(403).json({ success: false, error: "Invalid or expired token" });
+        }
+        
+        // Cek expiry (60 detik)
+        if (Date.now() - pending.created > 60000) {
+            pendingTokens.delete(token);
+            return res.status(403).json({ success: false, error: "Token expired" });
+        }
+        
+        // Validasi IP sama
+        if (getClientIP(req) !== pending.ip) {
+            logAccess(req, 'VALIDATE_IP_MISMATCH', false);
+            pendingTokens.delete(token);
+            return res.status(403).json({ success: false, error: "Session invalid" });
+        }
+        
+        // Validasi solution
+        if (parseInt(solution) !== pending.challenge.expectedAnswer) {
+            logAccess(req, 'VALIDATE_WRONG_SOLUTION', false);
+            return res.status(403).json({ success: false, error: "Invalid solution" });
+        }
+        
+        // Validasi executor info (opsional tapi menambah keamanan)
+        if (executorInfo) {
+            // executorInfo harus berisi data yang hanya executor bisa provide
+            // seperti: identifyexecutor(), getexecutorname(), dll
+            if (!executorInfo.name || !executorInfo.version) {
+                logAccess(req, 'VALIDATE_MISSING_EXECUTOR_INFO', false);
+                // Tidak langsung reject, tapi catat
+            }
+        }
+        
+        // Hapus pending token (sudah terpakai)
+        pendingTokens.delete(token);
+        
+        // Cek whitelist & blacklist
+        const userId = parseInt(pending.robloxData.userId);
+        const placeId = parseInt(pending.robloxData.placeId);
+        
+        const blockInfo = blockedDevices.isBlocked(pending.hwid, pending.ip, userId);
+        if (blockInfo.blocked) {
+            return res.status(403).json({ 
+                success: false, 
+                error: "Access denied", 
+                reason: blockInfo.reason,
+                banId: blockInfo.banId 
+            });
+        }
+        
+        if (config.WHITELIST_USER_IDS.length > 0 && !config.WHITELIST_USER_IDS.includes(userId)) {
+            return res.status(403).json({ success: false, error: "Not whitelisted", userId });
+        }
+        
+        if (config.ALLOWED_PLACE_IDS.length > 0 && !config.ALLOWED_PLACE_IDS.includes(placeId)) {
+            return res.status(403).json({ success: false, error: "Game not allowed", placeId });
+        }
+        
+        // Generate session token untuk akses script
+        const sessionToken = generateSecureToken();
+        validatedSessions.set(sessionToken, {
+            userId,
+            placeId,
+            hwid: pending.hwid,
+            ip: pending.ip,
+            created: Date.now()
+        });
+        
+        logAccess(req, 'VALIDATE_SUCCESS', true, { userId, placeId });
+        
+        // Kirim session token, bukan script langsung
+        res.json({
+            success: true,
+            sessionToken,
+            expiresIn: 300 // 5 menit untuk fetch script
+        });
+        
+    } catch (error) {
+        res.status(500).json({ success: false, error: "Server error" });
+    }
+});
+
+// ============================================================
+// 🔐 NEW: STEP 3 - Get Script (Dengan Session Token)
+// ============================================================
+app.post('/api/getScript', async (req, res) => {
+    const suspicion = detectSuspiciousRequest(req);
+    
+    if (suspicion.score >= 40) {
+        logAccess(req, 'GETSCRIPT_BLOCKED_SUSPICIOUS', false, { score: suspicion.score });
+        setTimeout(() => {
+            res.type('text/plain').send(FAKE_SCRIPT);
+        }, Math.random() * 2000 + 1000);
+        return;
+    }
+    
+    try {
+        const { sessionToken } = req.body;
+        
+        if (!sessionToken) {
+            return res.status(400).json({ success: false, error: "Missing session token" });
+        }
+        
+        const session = validatedSessions.get(sessionToken);
+        if (!session) {
+            logAccess(req, 'GETSCRIPT_INVALID_SESSION', false);
+            return res.status(403).json({ success: false, error: "Invalid session" });
+        }
+        
+        // Cek expiry (5 menit)
+        if (Date.now() - session.created > 300000) {
+            validatedSessions.delete(sessionToken);
+            return res.status(403).json({ success: false, error: "Session expired" });
+        }
+        
+        // Validasi IP sama
+        if (getClientIP(req) !== session.ip) {
+            logAccess(req, 'GETSCRIPT_IP_MISMATCH', false);
+            validatedSessions.delete(sessionToken);
+            return res.status(403).json({ success: false, error: "Session invalid" });
+        }
+        
+        // Hapus session (single use)
+        validatedSessions.delete(sessionToken);
+        
+        // Ambil script
+        let script = scriptCache.get('main_script');
+        if (!script) {
+            if (!config.SCRIPT_SOURCE_URL) {
+                return res.status(500).json({ success: false, error: "Server not configured" });
+            }
+            try {
+                const response = await axios.get(config.SCRIPT_SOURCE_URL, { 
+                    timeout: 15000, 
+                    headers: { 'User-Agent': 'Roblox/WinInet' },
+                    validateStatus: (s) => s === 200 
+                });
+                script = response.data;
+                if (typeof script !== 'string' || script.length < 10) throw new Error('Invalid');
+                scriptCache.set('main_script', script);
+            } catch {
+                return res.status(500).json({ success: false, error: "Failed to fetch script" });
+            }
+        }
+        
+        const serverUrl = process.env.RENDER_EXTERNAL_URL || process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
+        const banEndpoint = `${serverUrl}/api/ban`;
+        const ownerStr = config.OWNER_USER_IDS.join(', ');
+        
+        const alreadyObfuscated = config.SCRIPT_ALREADY_OBFUSCATED || isScriptObfuscated(script);
+        
+        // Wrap script dengan proteksi
+        const protectedScript = `-- Session verified: ${session.userId}
+local _OWNER_IDS={${ownerStr}}
+local _BAN_EP="${banEndpoint}"
+local _SESSION_USER=${session.userId}
+local _SESSION_PLACE=${session.placeId}
+
+-- Anti-spy check
+local function _checkSpy()
+    local _CORE=game:GetService("CoreGui")
+    local _spyPatterns={"simplespy","httpspy","remotespy","hydroxide","dex_explorer"}
+    for _,g in pairs(_CORE:GetChildren()) do
+        if g:IsA("ScreenGui") and g.Enabled then
+            local nm=g.Name:lower()
+            for _,p in pairs(_spyPatterns) do
+                if nm:find(p,1,true) then return true,g.Name end
+            end
+        end
+    end
+    local env=getgenv and getgenv() or _G
+    local markers={"SimpleSpyExecuted","SimpleSpy_Loaded","HttpSpy_Active"}
+    for _,m in pairs(markers) do
+        if rawget(env,m)==true then return true,m end
+    end
+    return false,nil
+end
+
+local spyActive,spyName=_checkSpy()
+if spyActive then
+    game:GetService("Players").LocalPlayer:Kick("⛔ Spy Tool Detected: "..spyName)
+    return
+end
+
+-- Owner protection
+local _PLAYERS=game:GetService("Players")
+local _LOCAL=_PLAYERS.LocalPlayer
+local function _isOwner(uid)
+    for _,id in ipairs(_OWNER_IDS) do
+        if uid==id then return true end
+    end
+    return false
+end
+for _,p in pairs(_PLAYERS:GetPlayers()) do
+    if _isOwner(p.UserId) and p~=_LOCAL then
+        game:GetService("StarterGui"):SetCore("SendNotification",{Title="⚠️",Text="Cannot load: Owner in server",Duration=5})
+        return
+    end
+end
+
+-- Main script
+${script}`;
+        
+        logAccess(req, 'GETSCRIPT_SUCCESS', true, { userId: session.userId, size: protectedScript.length });
+        
+        res.json({
+            success: true,
+            script: protectedScript,
+            meta: {
+                userId: session.userId,
+                placeId: session.placeId,
+                timestamp: Date.now()
+            }
+        });
+        
+    } catch (error) {
+        res.status(500).json({ success: false, error: "Server error" });
+    }
+});
+
+// ============================================================
+// 🔐 AUTH ENDPOINTS (Legacy - untuk backward compatibility)
 // ============================================================
 app.post('/api/auth/challenge', async (req, res) => {
-    const blocked = isBlockedUA(req.headers['user-agent']);
-    if (blocked.blocked) {
-        logAccess(req, 'CHALLENGE_BOT_BLOCKED', false, { reason: blocked.reason });
-        return res.status(403).json({ success: false, error: "Forbidden" });
+    const suspicion = detectSuspiciousRequest(req);
+    if (suspicion.score >= 40) {
+        logAccess(req, 'CHALLENGE_BLOCKED', false, { score: suspicion.score, reasons: suspicion.reasons });
+        setTimeout(() => {
+            res.json({ 
+                success: true, 
+                challengeId: crypto.randomBytes(16).toString('hex'),
+                puzzle: { numbers: [1,2,3,4,5], operation: 'sum' },
+                expiresIn: 60 
+            });
+        }, Math.random() * 2000 + 1000);
+        return;
     }
+    
     try {
         const { userId, hwid, placeId } = req.body;
         if (!userId || !hwid || !placeId) return res.status(400).json({ success: false, error: "Missing required fields" });
+        
         const userIdNum = parseInt(userId), placeIdNum = parseInt(placeId);
         if (isNaN(userIdNum) || isNaN(placeIdNum)) return res.status(400).json({ success: false, error: "Invalid ID format" });
+        
         const blockInfo = blockedDevices.isBlocked(hwid, getClientIP(req), userIdNum);
         if (blockInfo.blocked) return res.status(403).json({ success: false, error: "Access denied", reason: blockInfo.reason, banId: blockInfo.banId });
+        
         if (config.WHITELIST_USER_IDS.length > 0 && !config.WHITELIST_USER_IDS.includes(userIdNum)) return res.status(403).json({ success: false, error: "Not whitelisted", userId: userIdNum });
         if (config.ALLOWED_PLACE_IDS.length > 0 && !config.ALLOWED_PLACE_IDS.includes(placeIdNum)) return res.status(403).json({ success: false, error: "This game is not allowed", placeId: placeIdNum });
+        
         const challenge = challenges.create(userIdNum, hwid, placeIdNum, getClientIP(req));
         logAccess(req, 'CHALLENGE_ISSUED', true, { challengeId: challenge.id, userId: userIdNum });
         res.json({ success: true, challengeId: challenge.id, puzzle: challenge.puzzle, expiresIn: 60 });
-    } catch (error) { res.status(500).json({ success: false, error: "Server error" }); }
+    } catch (error) { 
+        res.status(500).json({ success: false, error: "Server error" }); 
+    }
 });
 
 app.post('/api/auth/verify', async (req, res) => {
-    const blocked = isBlockedUA(req.headers['user-agent']);
-    if (blocked.blocked) {
-        logAccess(req, 'VERIFY_BOT_BLOCKED', false, { reason: blocked.reason });
-        return res.status(403).json({ success: false, error: "Forbidden" });
+    const suspicion = detectSuspiciousRequest(req);
+    if (suspicion.score >= 40) {
+        logAccess(req, 'VERIFY_BLOCKED', false, { score: suspicion.score });
+        setTimeout(() => {
+            res.json({ success: true, mode: 'raw', script: FAKE_SCRIPT });
+        }, Math.random() * 3000 + 2000);
+        return;
     }
+    
     try {
         const { challengeId, solution, timestamp } = req.body;
         if (!challengeId || solution === undefined || !timestamp) return res.status(400).json({ success: false, error: "Missing fields" });
+        
         const result = challenges.verify(challengeId, solution, getClientIP(req));
         if (!result.valid) return res.status(403).json({ success: false, error: result.error });
+        
         const challenge = result.challenge;
         let script = scriptCache.get('main_script');
         if (!script) {
@@ -235,48 +735,162 @@ app.post('/api/auth/verify', async (req, res) => {
                 scriptCache.set('main_script', script);
             } catch { return res.status(500).json({ success: false, error: "Failed to fetch script" }); }
         }
+        
         const serverUrl = process.env.RENDER_EXTERNAL_URL || process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
         const alreadyObfuscated = config.SCRIPT_ALREADY_OBFUSCATED || isScriptObfuscated(script);
+        
         if (alreadyObfuscated) {
             logAccess(req, 'SCRIPT_SERVED_RAW', true, { userId: challenge.userId, size: script.length });
-            return res.json({ success: true, mode: 'raw', script, ownerIds: config.OWNER_USER_IDS, whitelistIds: config.WHITELIST_USER_IDS, banEndpoint: `${serverUrl}/api/ban`, meta: { userId: challenge.userId, placeId: challenge.placeId, timestamp: Date.now() } });
+            return res.json({ 
+                success: true, 
+                mode: 'raw', 
+                script, 
+                ownerIds: config.OWNER_USER_IDS, 
+                whitelistIds: config.WHITELIST_USER_IDS, 
+                banEndpoint: `${serverUrl}/api/ban`, 
+                meta: { userId: challenge.userId, placeId: challenge.placeId, timestamp: Date.now() } 
+            });
         }
+        
         const sessionKey = generateSessionKey(challenge.userId, challenge.hwid, timestamp, config.SECRET_KEY);
-        const chunks = []; const chunkSize = 2000;
-        for (let i = 0; i < script.length; i += chunkSize) { const chunk = script.substring(i, i + chunkSize); const encrypted = []; for (let j = 0; j < chunk.length; j++) encrypted.push(chunk.charCodeAt(j) ^ sessionKey.charCodeAt(j % sessionKey.length)); chunks.push(encrypted); }
+        const chunks = []; 
+        const chunkSize = 2000;
+        for (let i = 0; i < script.length; i += chunkSize) { 
+            const chunk = script.substring(i, i + chunkSize); 
+            const encrypted = []; 
+            for (let j = 0; j < chunk.length; j++) 
+                encrypted.push(chunk.charCodeAt(j) ^ sessionKey.charCodeAt(j % sessionKey.length)); 
+            chunks.push(encrypted); 
+        }
+        
         const checksum = crypto.createHash('md5').update(script).digest('hex');
         logAccess(req, 'SCRIPT_SERVED_ENCRYPTED', true, { userId: challenge.userId, chunks: chunks.length });
-        res.json({ success: true, mode: 'encrypted', key: sessionKey, chunks, checksum, ownerIds: config.OWNER_USER_IDS, whitelistIds: config.WHITELIST_USER_IDS, banEndpoint: `${serverUrl}/api/ban`, meta: { userId: challenge.userId, placeId: challenge.placeId, timestamp: Date.now() } });
-    } catch (error) { res.status(500).json({ success: false, error: "Server error" }); }
+        
+        res.json({ 
+            success: true, 
+            mode: 'encrypted', 
+            key: sessionKey, 
+            chunks, 
+            checksum, 
+            ownerIds: config.OWNER_USER_IDS, 
+            whitelistIds: config.WHITELIST_USER_IDS, 
+            banEndpoint: `${serverUrl}/api/ban`, 
+            meta: { userId: challenge.userId, placeId: challenge.placeId, timestamp: Date.now() } 
+        });
+    } catch (error) { 
+        res.status(500).json({ success: false, error: "Server error" }); 
+    }
 });
 
 // ============================================================
-// 📜 LOADER ENDPOINT - Anti-Bot Protection
+// 📜 LOADER ENDPOINT - HONEYPOT VERSION
 // ============================================================
 const loaderHandler = (req, res) => {
     const ua = req.headers['user-agent'] || '';
+    const suspicion = detectSuspiciousRequest(req);
     
-    // ❌ Block bots/browsers/scrapers
-    const blocked = isBlockedUA(ua);
-    if (blocked.blocked) {
-        logAccess(req, 'LOADER_BOT_BLOCKED', false, { ua, reason: blocked.reason });
-        return res.status(403).type('text/plain').send('--[[ Access Denied ]]');
+    // Log semua request untuk analisis
+    logAccess(req, 'LOADER_REQUEST', true, { 
+        ua: ua.substring(0, 100), 
+        score: suspicion.score, 
+        reasons: suspicion.reasons 
+    });
+    
+    // Jika mencurigakan, kirim HONEYPOT script (fake)
+    if (suspicion.score >= 30) {
+        logAccess(req, 'LOADER_HONEYPOT_SERVED', false, { score: suspicion.score });
+        return res.type('text/plain').send(HONEYPOT_SCRIPT);
     }
     
-    // ✅ Require valid executor UA
-    if (!isValidExecutor(ua)) {
-        logAccess(req, 'LOADER_INVALID_EXECUTOR', false, { ua });
-        return res.status(403).type('text/plain').send('--[[ Invalid Client ]]');
+    // Validasi executor
+    const validExecutor = isLikelyRobloxExecutor(req);
+    if (!validExecutor.valid) {
+        logAccess(req, 'LOADER_INVALID_EXECUTOR', false, { reason: validExecutor.reason });
+        return res.type('text/plain').send(HONEYPOT_SCRIPT);
     }
     
     const serverUrl = process.env.RENDER_EXTERNAL_URL || process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
     
-    const loaderScript = `local _S="${serverUrl}" 
-local function _c()
-    local _cg=game:GetService("CoreGui")
-    local _pg=game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui")
-    local _spyPatterns={"simplespy","simple_spy","httpspy","http_spy","remotespy","remote_spy","hydroxide","dex_explorer","dex v4","networkspy","requestlogger"}
-    for _,g in pairs(_cg:GetChildren()) do
+    // LOADER BARU: 3-Step Verification
+    const loaderScript = `--[[ Premium Loader v5.5.0 - Secure ]]
+local _S="${serverUrl}"
+local _HTTP=game:GetService("HttpService")
+local _PLAYERS=game:GetService("Players")
+local _LOCAL=_PLAYERS.LocalPlayer
+local _STAR=game:GetService("StarterGui")
+
+-- Utility functions
+local function _notify(t,x,d) 
+    pcall(function() 
+        _STAR:SetCore("SendNotification",{Title=t,Text=x,Duration=d or 3}) 
+    end) 
+end
+
+local function _kick(msg)
+    task.wait(0.5)
+    _LOCAL:Kick(msg)
+end
+
+local function _getHWID()
+    local s,r=pcall(function()
+        if gethwid then return gethwid() end
+        if get_hwid then return get_hwid() end
+        if getexecutorname then return getexecutorname().."_"..tostring(_LOCAL.UserId) end
+        return "FB_"..tostring(_LOCAL.UserId)
+    end)
+    return s and r or "UNK"
+end
+
+local function _getExecutorInfo()
+    local info = {name="Unknown",version="1.0"}
+    pcall(function()
+        if identifyexecutor then
+            local name,ver = identifyexecutor()
+            info.name = name or "Unknown"
+            info.version = ver or "1.0"
+        elseif getexecutorname then
+            info.name = getexecutorname()
+        end
+    end)
+    return info
+end
+
+local function _httpPost(url,data)
+    local req=(syn and syn.request) or request or http_request or (http and http.request)
+    if not req then return nil,"No HTTP" end
+    
+    local s,r=pcall(function()
+        return req({
+            Url=url,
+            Method="POST",
+            Headers={
+                ["Content-Type"]="application/json",
+                ["User-Agent"]="Roblox/WinInet",
+                ["X-HWID"]=_getHWID(),
+                ["X-Player-ID"]=tostring(_LOCAL.UserId),
+                ["X-Place-ID"]=tostring(game.PlaceId)
+            },
+            Body=_HTTP:JSONEncode(data)
+        })
+    end)
+    
+    if not s then return nil,tostring(r) end
+    if r.StatusCode~=200 then
+        local e=nil
+        pcall(function() e=_HTTP:JSONDecode(r.Body) end)
+        return e,"HTTP "..r.StatusCode
+    end
+    
+    local ps,pd=pcall(function() return _HTTP:JSONDecode(r.Body) end)
+    return ps and pd or nil
+end
+
+-- Anti-spy check
+local function _checkSpy()
+    local _CORE=game:GetService("CoreGui")
+    local _spyPatterns={"simplespy","simple_spy","httpspy","http_spy","remotespy","remote_spy","hydroxide","dex_explorer","networkspy"}
+    
+    for _,g in pairs(_CORE:GetChildren()) do
         if g:IsA("ScreenGui") and g.Enabled then
             local nm=g.Name:lower()
             for _,p in pairs(_spyPatterns) do
@@ -284,82 +898,124 @@ local function _c()
             end
         end
     end
-    if _pg then
-        for _,g in pairs(_pg:GetChildren()) do
-            if g:IsA("ScreenGui") and g.Enabled then
-                local nm=g.Name:lower()
-                for _,p in pairs(_spyPatterns) do
-                    if nm:find(p,1,true) then return true,g.Name end
-                end
-            end
-        end
+    
+    local env=getgenv and getgenv() or _G
+    local markers={"SimpleSpyExecuted","SimpleSpy_Loaded","HttpSpy_Active","RemoteSpy_Active"}
+    for _,m in pairs(markers) do
+        if rawget(env,m)==true then return true,m end
     end
-    local _g=getgenv and getgenv() or _G
-    local _activeMarkers={"SimpleSpyExecuted","_G.SimpleSpyExecuted","SimpleSpy_Loaded","HttpSpy_Active","RemoteSpy_Active","IY_LOADED","InfiniteYieldLoaded"}
-    for _,m in pairs(_activeMarkers) do
-        local v=rawget(_g,m)
-        if v==true then return true,m end
-    end
-    if rawget(_g,"SimpleSpy") and type(rawget(_g,"SimpleSpy"))=="table" and rawget(_g,"SimpleSpy").enabled==true then
-        return true,"SimpleSpy.enabled"
-    end
-    if rawget(_g,"HttpSpy") and type(rawget(_g,"HttpSpy"))=="table" then
-        return true,"HttpSpy"
-    end
+    
     return false,nil
 end
-local function _k(r) task.wait(0.5) game:GetService("Players").LocalPlayer:Kick(r) end
-local function _n(t,x,d) pcall(function() game:GetService("StarterGui"):SetCore("SendNotification",{Title=t,Text=x,Duration=d or 3}) end) end
-local _HS=game:GetService("HttpService") local _P=game:GetService("Players") local _LP=_P.LocalPlayer local _A=true
-local function _hw() local s,r=pcall(function() if gethwid then return gethwid() end if get_hwid then return get_hwid() end if getexecutorname then return getexecutorname().."_"..tostring(_LP.UserId) end return "FB_"..tostring(_LP.UserId) end) return s and r or "UNK" end
-local function _hp(u,d) local rq=(syn and syn.request) or request or http_request or (http and http.request) if not rq then return nil,"No HTTP" end local s,r=pcall(function() return rq({Url=u,Method="POST",Headers={["Content-Type"]="application/json",["User-Agent"]="RobloxExecutor/5.4",["X-HWID"]=_hw(),["X-Player-ID"]=tostring(_LP.UserId),["X-Place-ID"]=tostring(game.PlaceId)},Body=_HS:JSONEncode(d)}) end) if not s then return nil,tostring(r) end if r.StatusCode~=200 then local e=nil pcall(function() e=_HS:JSONDecode(r.Body) end) return e,"HTTP "..r.StatusCode end local ps,pd=pcall(function() return _HS:JSONDecode(r.Body) end) return ps and pd or nil end
-local function _xd(d,k) local r={} for i=1,#d do r[i]=string.char(bit32.bxor(d[i],string.byte(k,((i-1)%#k)+1))) end return table.concat(r) end
-local function _op(oIds,wIds) if not oIds or #oIds==0 then return true end local function isO(uid) for _,id in ipairs(oIds) do if uid==id then return true end end return false end local function chk() for _,p in pairs(_P:GetPlayers()) do if isO(p.UserId) and p~=_LP then return true,p.Name end end return false,nil end local op,on=chk() if op then _n("⚠️ Cannot Load","Owner ("..on..") in server",5) return false end task.spawn(function() while _A and task.wait(15) do local pr,nm=chk() if pr then _A=false if _G._SCRIPT_CLEANUP then pcall(_G._SCRIPT_CLEANUP) end _n("⚠️ Script Stopped","Owner ("..nm..") detected",3) break end end end) _P.PlayerAdded:Connect(function(p) task.wait(1) if _A and isO(p.UserId) then _A=false if _G._SCRIPT_CLEANUP then pcall(_G._SCRIPT_CLEANUP) end _n("⚠️ Script Stopped","Owner ("..p.Name..") joined",3) end end) return true end
-local function _m() 
-    local sp,nm=_c() 
-    if sp then 
-        _n("🚨 Spy Active",nm.." is running",3) 
-        _k("⛔ Active Spy Tool Detected\\n\\nTool: "..nm.."\\n\\nClose the spy tool and try again") 
-        return false 
-    end 
-    _n("🔄 Loading","Connecting...",2) 
-    local cD,e1=_hp(_S.."/api/auth/challenge",{userId=_LP.UserId,hwid=_hw(),placeId=game.PlaceId}) 
-    if not cD then _n("❌ Error","Connection failed",5) return false end 
-    if not cD.success then _n("❌ Denied",cD.error or "Error",5) if cD.error=="Not whitelisted" then task.wait(2) _LP:Kick("⛔ Not whitelisted") end return false end 
-    local pz=cD.puzzle local sl=0 
-    if pz and pz.numbers then for _,n in ipairs(pz.numbers) do sl=sl+n end end 
-    local sp2,nm2=_c() 
-    if sp2 then 
-        _n("🚨 Spy Active",nm2.." detected",3) 
-        _k("⛔ Spy Tool: "..nm2) 
-        return false 
-    end 
-    _n("🔄 Loading","Verifying...",2) 
-    local vD,e2=_hp(_S.."/api/auth/verify",{challengeId=cD.challengeId,solution=sl,timestamp=os.time()}) 
-    if not vD or not vD.success then _n("❌ Error",vD and vD.error or "Verify failed",5) return false end 
-    _n("✅ Verified","Loading...",2) 
-    local cr=_op(vD.ownerIds,vD.whitelistIds) 
-    if not cr then return false end 
-    local sp3,nm3=_c() 
-    if sp3 then 
-        _n("🚨 Spy Active",nm3.." detected",3) 
-        _k("⛔ Spy Tool: "..nm3) 
-        return false 
-    end 
-    local fs 
-    if vD.mode=="raw" then fs=vD.script else local pts={} for i,ch in ipairs(vD.chunks) do pts[i]=_xd(ch,vD.key) end fs=table.concat(pts) end 
-    local fn,er=loadstring(fs) 
-    if fn then 
-        local _ok,_er=pcall(fn) 
-        if not _ok then _n("❌ Error","Script error",5) end 
-        return _ok 
-    end 
-    _n("❌ Error","Parse failed",5) 
-    return false 
-end
-task.spawn(function() task.wait(0.1) pcall(_m) end)`;
+
+-- Main loader
+local function _main()
+    -- Step 0: Check spy
+    local spyActive,spyName=_checkSpy()
+    if spyActive then
+        _notify("🚨 Blocked",spyName.." detected",3)
+        _kick("⛔ Spy Tool Detected\\n\\n"..spyName)
+        return
+    end
     
-    logAccess(req, 'LOADER_SERVED', true, { size: loaderScript.length, ua });
+    _notify("🔄 Loading","Initializing...",2)
+    
+    -- Collect Roblox data (only available in real Roblox environment)
+    local robloxData = {
+        userId = _LOCAL.UserId,
+        username = _LOCAL.Name,
+        displayName = _LOCAL.DisplayName,
+        placeId = game.PlaceId,
+        gameJobId = game.JobId,
+        placeVersion = game.PlaceVersion
+    }
+    
+    -- Step 1: Initialize session
+    local initRes,initErr = _httpPost(_S.."/api/init", {
+        robloxData = robloxData,
+        executorInfo = _getExecutorInfo()
+    })
+    
+    if not initRes or not initRes.success then
+        _notify("❌ Error",initRes and initRes.error or "Init failed",5)
+        return
+    end
+    
+    -- Solve puzzle
+    local solution = 0
+    if initRes.challenge and initRes.challenge.puzzle and initRes.challenge.puzzle.numbers then
+        for _,n in ipairs(initRes.challenge.puzzle.numbers) do
+            solution = solution + n
+        end
+    end
+    
+    -- Check spy again
+    local spyActive2,spyName2=_checkSpy()
+    if spyActive2 then
+        _notify("🚨 Blocked",spyName2.." detected",3)
+        _kick("⛔ Spy Tool Detected: "..spyName2)
+        return
+    end
+    
+    _notify("🔄 Loading","Validating...",2)
+    
+    -- Step 2: Validate
+    local valRes,valErr = _httpPost(_S.."/api/validate", {
+        token = initRes.token,
+        solution = solution,
+        executorInfo = _getExecutorInfo()
+    })
+    
+    if not valRes or not valRes.success then
+        _notify("❌ Denied",valRes and valRes.error or "Validation failed",5)
+        if valRes and valRes.error == "Not whitelisted" then
+            task.wait(2)
+            _kick("⛔ Not Whitelisted\\n\\nYour User ID: "..tostring(_LOCAL.UserId))
+        end
+        return
+    end
+    
+    -- Final spy check
+    local spyActive3,spyName3=_checkSpy()
+    if spyActive3 then
+        _notify("🚨 Blocked",spyName3.." detected",3)
+        _kick("⛔ Spy Tool Detected: "..spyName3)
+        return
+    end
+    
+    _notify("🔄 Loading","Fetching script...",2)
+    
+    -- Step 3: Get script
+    local scriptRes,scriptErr = _httpPost(_S.."/api/getScript", {
+        sessionToken = valRes.sessionToken
+    })
+    
+    if not scriptRes or not scriptRes.success then
+        _notify("❌ Error",scriptRes and scriptRes.error or "Script fetch failed",5)
+        return
+    end
+    
+    _notify("✅ Success","Executing...",2)
+    
+    -- Execute script
+    local fn,err = loadstring(scriptRes.script)
+    if fn then
+        local ok,runErr = pcall(fn)
+        if not ok then
+            _notify("❌ Error","Script error",5)
+        end
+    else
+        _notify("❌ Error","Parse failed",5)
+    end
+end
+
+-- Execute
+task.spawn(function()
+    task.wait(0.1)
+    pcall(_main)
+end)`;
+    
+    logAccess(req, 'LOADER_SERVED_SECURE', true, { size: loaderScript.length });
     res.type('text/plain').send(loaderScript);
 };
 
@@ -367,113 +1023,16 @@ app.get('/api/loader.lua', loaderHandler);
 app.get('/loader', loaderHandler);
 
 // ============================================================
-// 📜 SCRIPT ENDPOINT - Anti-Bot + Whitelist
+// 📜 SCRIPT ENDPOINT - Protected
 // ============================================================
 app.get('/script', async (req, res) => {
-    const ua = req.headers['user-agent'] || '';
+    const suspicion = detectSuspiciousRequest(req);
     
-    // ❌ Block bots/browsers
-    const blocked = isBlockedUA(ua);
-    if (blocked.blocked) {
-        logAccess(req, 'SCRIPT_BOT_BLOCKED', false, { ua, reason: blocked.reason });
-        return res.status(403).type('text/plain').send('--[[ Access Denied ]]');
-    }
+    // Selalu kirim honeypot untuk direct access ke /script
+    // Karena script asli harus didapat melalui 3-step verification
+    logAccess(req, 'SCRIPT_DIRECT_ACCESS', false, { score: suspicion.score });
     
-    // ✅ Require valid executor
-    if (!isValidExecutor(ua)) {
-        logAccess(req, 'SCRIPT_INVALID_EXECUTOR', false, { ua });
-        return res.status(403).type('text/plain').send('--[[ Invalid Client ]]');
-    }
-    
-    const playerIdHeader = getPlayerID(req), hwidHeader = getHWID(req);
-    
-    // Check blocked devices
-    const blockInfo = isDeviceBlocked(req);
-    if (blockInfo.blocked) return res.type('text/plain').send(`game:GetService("Players").LocalPlayer:Kick("⛔ Banned\\n\\nReason: ${blockInfo.reason}\\nBan ID: ${blockInfo.banId}")`);
-    
-    // ✅ Check whitelist
-    let isWhitelisted = config.WHITELIST_USER_IDS.length === 0 || (playerIdHeader && config.WHITELIST_USER_IDS.includes(parseInt(playerIdHeader)));
-    if (!isWhitelisted) {
-        logAccess(req, 'WHITELIST_REJECTED', false, { playerId: playerIdHeader });
-        return res.type('text/plain').send(`game:GetService("StarterGui"):SetCore("SendNotification",{Title="⛔ Not Whitelisted",Text="Your account is not whitelisted",Duration=5}) task.wait(2) game:GetService("Players").LocalPlayer:Kick("⛔ Not Whitelisted\\n\\nYour User ID: ${playerIdHeader || 'Unknown'}\\n\\nContact admin for access")`);
-    }
-    
-    try {
-        let script = scriptCache.get('main_script');
-        if (!script) {
-            if (!config.SCRIPT_SOURCE_URL) return res.type('text/plain').send(`game:GetService("StarterGui"):SetCore("SendNotification",{Title="⚠️ Error",Text="Server not configured",Duration=10})`);
-            try { const response = await axios.get(config.SCRIPT_SOURCE_URL, { timeout: 15000, headers: { 'User-Agent': 'Roblox/WinInet' }, validateStatus: (s) => s === 200 }); script = response.data; if (typeof script !== 'string' || script.length < 10) throw new Error('Invalid'); scriptCache.set('main_script', script); } catch { return res.type('text/plain').send(`game:GetService("StarterGui"):SetCore("SendNotification",{Title="⚠️ Error",Text="Failed to fetch",Duration=5})`); }
-        }
-        const serverUrl = process.env.RENDER_EXTERNAL_URL || process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
-        const banEndpoint = `${serverUrl}/api/ban`, ownerStr = config.OWNER_USER_IDS.join(', ');
-        const alreadyObfuscated = config.SCRIPT_ALREADY_OBFUSCATED || isScriptObfuscated(script);
-        if (alreadyObfuscated) {
-            const wrappedScript = `local _OWNER_IDS={${ownerStr}} local _BAN_EP="${banEndpoint}" local _PLAYERS=game:GetService("Players") local _LOCAL=_PLAYERS.LocalPlayer local _STAR=game:GetService("StarterGui") local _CORE=game:GetService("CoreGui") local _PGUI=_LOCAL:WaitForChild("PlayerGui") local _HTTP=game:GetService("HttpService") local _ACTIVE=true local _SHUTDOWN=false local _GUIS={} local _CONNS={} local _THREADS={} local _TAG="LS_"..tostring(tick()):gsub("%.","")
-local _ocache={} local function _isOwner(uid) if _ocache[uid]~=nil then return _ocache[uid] end for _,id in ipairs(_OWNER_IDS) do if uid==id then _ocache[uid]=true return true end end _ocache[uid]=false return false end
-local function _notify(t,x,d) pcall(function() _STAR:SetCore("SendNotification",{Title=t,Text=x,Duration=d or 3}) end) end
-local function _getHWID() local s,r=pcall(function() if gethwid then return gethwid() end if get_hwid then return get_hwid() end if getexecutorname then return getexecutorname().."_"..tostring(_LOCAL.UserId) end return "FB_"..tostring(_LOCAL.UserId) end) return s and r or "UNK" end
-local function _httpPost(url,data) local req=(syn and syn.request) or request or http_request or (http and http.request) if not req then return end pcall(function() req({Url=url,Method="POST",Headers={["Content-Type"]="application/json"},Body=_HTTP:JSONEncode(data)}) end) end
-local function _banPlayer(reason,tools) _httpPost(_BAN_EP,{hwid=_getHWID(),ip="",playerId=_LOCAL.UserId,playerName=_LOCAL.Name,reason=reason,toolsDetected=tools or {}}) task.wait(0.5) _LOCAL:Kick("⛔ Banned\\n\\nReason: "..reason.."\\n\\nAppeal: Contact admin") end
-local function _cleanup() if _SHUTDOWN then return end _SHUTDOWN=true _ACTIVE=false for i=#_THREADS,1,-1 do pcall(function() task.cancel(_THREADS[i]) end) _THREADS[i]=nil end for i=#_CONNS,1,-1 do pcall(function() if _CONNS[i] and _CONNS[i].Connected then _CONNS[i]:Disconnect() end end) _CONNS[i]=nil end task.wait(0.1) for i=#_GUIS,1,-1 do pcall(function() if _GUIS[i] and _GUIS[i].Parent then if _GUIS[i]:IsA("ScreenGui") then _GUIS[i].Enabled=false end _GUIS[i]:Destroy() end end) _GUIS[i]=nil end task.spawn(function() task.wait(0.1) pcall(function() for _,c in pairs(_CORE:GetChildren()) do if c:GetAttribute(_TAG) then if c:IsA("ScreenGui") then c.Enabled=false end c:Destroy() end end end) pcall(function() for _,c in pairs(_PGUI:GetChildren()) do if c:GetAttribute(_TAG) then if c:IsA("ScreenGui") then c.Enabled=false end c:Destroy() end end end) end) _G._OWNER_PROTECTION=nil _G._SCRIPT_CLEANUP=nil task.spawn(function() task.wait(0.5) for i=1,3 do pcall(function() collectgarbage("collect") end) task.wait(0.1) end end) _notify("⚠️ Stopped","Cleaned up",3) end
-_G._SCRIPT_CLEANUP=_cleanup
-local function _trackGUI(gui) task.defer(function() if not _ACTIVE then return end pcall(function() gui:SetAttribute(_TAG,true) table.insert(_GUIS,gui) end) end) end
-task.defer(function() if not _ACTIVE then return end local c1=_CORE.DescendantAdded:Connect(function(d) if _ACTIVE and d:IsA("ScreenGui") then _trackGUI(d) end end) table.insert(_CONNS,c1) local c2=_PGUI.DescendantAdded:Connect(function(d) if _ACTIVE and d:IsA("ScreenGui") then _trackGUI(d) end end) table.insert(_CONNS,c2) end)
-local _SPY_PATTERNS={"simplespy","simple_spy","httpspy","http_spy","remotespy","remote_spy","hydroxide","dex_explorer","networkspy"}
-local _ACTIVE_MARKERS={"SimpleSpyExecuted","SimpleSpy_Loaded","HttpSpy_Active","RemoteSpy_Active","IY_LOADED","InfiniteYieldLoaded"}
-local function _checkSpyActive()
-    for _,g in pairs(_CORE:GetChildren()) do
-        if g:IsA("ScreenGui") and g.Enabled then
-            local nm=g.Name:lower()
-            for _,p in pairs(_SPY_PATTERNS) do
-                if nm:find(p,1,true) then return true,"GUI",g.Name end
-            end
-        end
-    end
-    local env=getgenv and getgenv() or _G
-    for _,m in pairs(_ACTIVE_MARKERS) do
-        if rawget(env,m)==true then return true,"MARKER",m end
-    end
-    if rawget(env,"SimpleSpy") and type(rawget(env,"SimpleSpy"))=="table" and rawget(env,"SimpleSpy").enabled==true then
-        return true,"SIMPLESPY","SimpleSpy.enabled"
-    end
-    return false,nil,nil
-end
-local function _startSpyMonitor()
-    local monitor=task.spawn(function()
-        task.wait(10)
-        while _ACTIVE do
-            task.wait(5)
-            if not _ACTIVE then break end
-            local detected,category,signature=_checkSpyActive()
-            if detected then
-                _ACTIVE=false
-                _notify("🚨 Spy Detected",category..": "..signature,3)
-                task.wait(1)
-                _cleanup()
-                _banPlayer("Active spy tool detected: "..signature,{category,signature})
-                break
-            end
-        end
-    end)
-    table.insert(_THREADS,monitor)
-end
-local function _checkOwner() for _,p in pairs(_PLAYERS:GetPlayers()) do if _isOwner(p.UserId) and p~=_LOCAL then return true end end return false end
-if _checkOwner() then _notify("⚠️ Cannot Load","Owner in server",3) return end
-local ownerMon=task.spawn(function() while _ACTIVE do task.wait(15) if not _ACTIVE then break end if _checkOwner() then _cleanup() return end end end) table.insert(_THREADS,ownerMon)
-local pconn=_PLAYERS.PlayerAdded:Connect(function(p) if not _ACTIVE then return end task.wait(1) if _isOwner(p.UserId) then _cleanup() end end) table.insert(_CONNS,pconn)
-_G._OWNER_PROTECTION={active=function() return _ACTIVE end,stop=_cleanup,tag=_TAG}
-_startSpyMonitor()
-${script}`;
-            logAccess(req, 'SCRIPT_SERVED_RAW', true, { size: wrappedScript.length });
-            return res.type('text/plain').send(wrappedScript);
-        }
-        const timestamp = Date.now();
-        let sessionKey = null;
-        if (hwidHeader && playerIdHeader) sessionKey = generateSessionKey(playerIdHeader, hwidHeader, timestamp, config.SECRET_KEY);
-        const protectedScript = generateProtectedScript(script, { banEndpoint, whitelistUserIds: config.WHITELIST_USER_IDS, ownerUserIds: config.OWNER_USER_IDS, allowedPlaceIds: config.ALLOWED_PLACE_IDS, sessionKey });
-        logAccess(req, 'SCRIPT_SERVED_PROTECTED', true, { size: protectedScript.length });
-        res.type('text/plain').send(protectedScript);
-    } catch { res.type('text/plain').send(`game:GetService("StarterGui"):SetCore("SendNotification",{Title="❌ Error",Text="Unexpected error",Duration=5})`); }
+    res.type('text/plain').send(HONEYPOT_SCRIPT);
 });
 
 // ============================================================
@@ -483,36 +1042,142 @@ app.post('/api/ban', (req, res) => {
     try {
         const { hwid, ip, playerId, playerName, reason, toolsDetected } = req.body;
         if (!hwid && !ip && !playerId) return res.status(400).json({ error: "Missing identifier" });
+        
         const banId = crypto.randomBytes(8).toString('hex').toUpperCase();
-        blockedDevices.addBlock({ hwid, ip: ip || getClientIP(req), playerId, playerName, reason: reason || 'Manual ban', toolsDetected: toolsDetected || [], banId, timestamp: new Date().toISOString(), bannedBy: 'system' });
+        blockedDevices.addBlock({ 
+            hwid, 
+            ip: ip || getClientIP(req), 
+            playerId, 
+            playerName, 
+            reason: reason || 'Manual ban', 
+            toolsDetected: toolsDetected || [], 
+            banId, 
+            timestamp: new Date().toISOString(), 
+            bannedBy: 'system' 
+        });
+        
         logAccess(req, 'DEVICE_BANNED', true, { playerId, playerName, reason, toolsDetected, banId });
         res.json({ success: true, banId });
-    } catch (error) { res.status(500).json({ error: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ error: error.message }); 
+    }
 });
 
 // ============================================================
 // 👑 ADMIN ENDPOINTS
 // ============================================================
-function adminAuth(req, res, next) { const k = req.headers['x-admin-key'] || req.query.key; if (!k) return res.status(401).json({ error: "Admin key required" }); if (!secureCompare(k, config.ADMIN_KEY)) return res.status(403).json({ error: "Invalid admin key" }); next(); }
+function adminAuth(req, res, next) { 
+    const k = req.headers['x-admin-key'] || req.query.key; 
+    if (!k) return res.status(401).json({ error: "Admin key required" }); 
+    if (!secureCompare(k, config.ADMIN_KEY)) return res.status(403).json({ error: "Invalid admin key" }); 
+    next(); 
+}
 
-app.get('/api/admin/stats', adminAuth, (req, res) => { res.json({ success: true, stats: db.getStats(), config: { hasScriptUrl: !!config.SCRIPT_SOURCE_URL, scriptAlreadyObfuscated: config.SCRIPT_ALREADY_OBFUSCATED, whitelistCount: config.WHITELIST_USER_IDS.length, ownerCount: config.OWNER_USER_IDS.length }, server: { uptime: Math.floor(process.uptime()) + 's', memory: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB' } }); });
-app.get('/api/admin/logs', adminAuth, (req, res) => { const limit = Math.min(parseInt(req.query.limit) || 50, 500); let logs = db.getLogs(limit); if (req.query.filter) logs = logs.filter(l => l.action?.includes(req.query.filter.toUpperCase())); res.json({ success: true, count: logs.length, logs }); });
-app.get('/api/admin/bans', adminAuth, (req, res) => { res.json({ success: true, count: blockedDevices.count(), bans: blockedDevices.getAll() }); });
-app.delete('/api/admin/bans/:banId', adminAuth, (req, res) => { const removed = blockedDevices.removeByBanId(req.params.banId); res.json({ success: removed, message: removed ? 'Ban removed' : 'Ban not found' }); });
-app.post('/api/admin/bans', adminAuth, (req, res) => { const { hwid, ip, playerId, playerName, reason } = req.body; if (!hwid && !ip && !playerId) return res.status(400).json({ error: "Identifier required" }); const banId = crypto.randomBytes(8).toString('hex').toUpperCase(); blockedDevices.addBlock({ hwid, ip, playerId, playerName, reason: reason || 'Manual ban by admin', banId, timestamp: new Date().toISOString(), bannedBy: 'admin' }); res.json({ success: true, banId }); });
-app.post('/api/admin/bans/clear', adminAuth, (req, res) => { const count = blockedDevices.count(); blockedDevices.clearAll(); res.json({ success: true, message: `Cleared ${count} bans` }); });
-app.post('/api/admin/cache/clear', adminAuth, (req, res) => { scriptCache.flushAll(); res.json({ success: true, message: "Cache cleared" }); });
-app.post('/api/admin/refresh', adminAuth, async (req, res) => { try { scriptCache.flushAll(); if (!config.SCRIPT_SOURCE_URL) return res.status(400).json({ success: false, error: 'No URL configured' }); const response = await axios.get(config.SCRIPT_SOURCE_URL, { timeout: 15000, headers: { 'User-Agent': 'Roblox/WinInet' } }); if (typeof response.data === 'string' && response.data.length > 10) { scriptCache.set('main_script', response.data); res.json({ success: true, size: response.data.length }); } else throw new Error('Invalid content'); } catch (error) { res.status(500).json({ success: false, error: error.message }); } });
-app.get('/api/admin/whitelist', adminAuth, (req, res) => { res.json({ success: true, whitelist: config.WHITELIST_USER_IDS, count: config.WHITELIST_USER_IDS.length }); });
-app.get('/api/admin/user/:userId', adminAuth, async (req, res) => { try { const userId = parseInt(req.params.userId); const userInfo = await verifyRobloxUser(userId); res.json({ success: true, user: { ...userInfo, isWhitelisted: config.WHITELIST_USER_IDS.includes(userId), isOwner: config.OWNER_USER_IDS.includes(userId) } }); } catch (error) { res.status(500).json({ success: false, error: error.message }); } });
+app.get('/api/admin/stats', adminAuth, (req, res) => { 
+    res.json({ 
+        success: true, 
+        stats: db.getStats(),
+        sessions: {
+            pending: pendingTokens.size,
+            validated: validatedSessions.size
+        },
+        config: { 
+            hasScriptUrl: !!config.SCRIPT_SOURCE_URL, 
+            scriptAlreadyObfuscated: config.SCRIPT_ALREADY_OBFUSCATED, 
+            whitelistCount: config.WHITELIST_USER_IDS.length, 
+            ownerCount: config.OWNER_USER_IDS.length 
+        }, 
+        server: { 
+            uptime: Math.floor(process.uptime()) + 's', 
+            memory: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB' 
+        } 
+    }); 
+});
+
+app.get('/api/admin/logs', adminAuth, (req, res) => { 
+    const limit = Math.min(parseInt(req.query.limit) || 50, 500); 
+    let logs = db.getLogs(limit); 
+    if (req.query.filter) logs = logs.filter(l => l.action?.includes(req.query.filter.toUpperCase())); 
+    res.json({ success: true, count: logs.length, logs }); 
+});
+
+app.get('/api/admin/bans', adminAuth, (req, res) => { 
+    res.json({ success: true, count: blockedDevices.count(), bans: blockedDevices.getAll() }); 
+});
+
+app.delete('/api/admin/bans/:banId', adminAuth, (req, res) => { 
+    const removed = blockedDevices.removeByBanId(req.params.banId); 
+    res.json({ success: removed, message: removed ? 'Ban removed' : 'Ban not found' }); 
+});
+
+app.post('/api/admin/bans', adminAuth, (req, res) => { 
+    const { hwid, ip, playerId, playerName, reason } = req.body; 
+    if (!hwid && !ip && !playerId) return res.status(400).json({ error: "Identifier required" }); 
+    const banId = crypto.randomBytes(8).toString('hex').toUpperCase(); 
+    blockedDevices.addBlock({ hwid, ip, playerId, playerName, reason: reason || 'Manual ban by admin', banId, timestamp: new Date().toISOString(), bannedBy: 'admin' }); 
+    res.json({ success: true, banId }); 
+});
+
+app.post('/api/admin/bans/clear', adminAuth, (req, res) => { 
+    const count = blockedDevices.count(); 
+    blockedDevices.clearAll(); 
+    res.json({ success: true, message: `Cleared ${count} bans` }); 
+});
+
+app.post('/api/admin/cache/clear', adminAuth, (req, res) => { 
+    scriptCache.flushAll(); 
+    res.json({ success: true, message: "Cache cleared" }); 
+});
+
+app.post('/api/admin/refresh', adminAuth, async (req, res) => { 
+    try { 
+        scriptCache.flushAll(); 
+        if (!config.SCRIPT_SOURCE_URL) return res.status(400).json({ success: false, error: 'No URL configured' }); 
+        const response = await axios.get(config.SCRIPT_SOURCE_URL, { timeout: 15000, headers: { 'User-Agent': 'Roblox/WinInet' } }); 
+        if (typeof response.data === 'string' && response.data.length > 10) { 
+            scriptCache.set('main_script', response.data); 
+            res.json({ success: true, size: response.data.length }); 
+        } else throw new Error('Invalid content'); 
+    } catch (error) { 
+        res.status(500).json({ success: false, error: error.message }); 
+    } 
+});
+
+app.get('/api/admin/whitelist', adminAuth, (req, res) => { 
+    res.json({ success: true, whitelist: config.WHITELIST_USER_IDS, count: config.WHITELIST_USER_IDS.length }); 
+});
+
+app.get('/api/admin/user/:userId', adminAuth, async (req, res) => { 
+    try { 
+        const userId = parseInt(req.params.userId); 
+        const userInfo = await verifyRobloxUser(userId); 
+        res.json({ 
+            success: true, 
+            user: { 
+                ...userInfo, 
+                isWhitelisted: config.WHITELIST_USER_IDS.includes(userId), 
+                isOwner: config.OWNER_USER_IDS.includes(userId) 
+            } 
+        }); 
+    } catch (error) { 
+        res.status(500).json({ success: false, error: error.message }); 
+    } 
+});
 
 // ============================================================
 // 404 Handler
 // ============================================================
 app.use('*', (req, res) => {
-    const blocked = isBlockedUA(req.headers['user-agent']);
-    if (blocked.blocked) return res.status(404).type('text/plain').send('--[[ Not Found ]]');
-    if (isBrowser(req)) return res.status(404).type('text/html').send(UNAUTHORIZED_HTML);
+    const suspicion = detectSuspiciousRequest(req);
+    
+    if (suspicion.score >= 20) {
+        return res.status(404).type('text/plain').send('--[[ 404 ]]');
+    }
+    
+    if (isBrowser(req)) {
+        return res.status(404).type('text/html').send(UNAUTHORIZED_HTML);
+    }
+    
     res.status(404).json({ error: "Not found" });
 });
 
@@ -521,9 +1186,10 @@ app.use('*', (req, res) => {
 // ============================================================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🛡️ Premium Loader v5.4.4 | Port: ${PORT} | ${new Date().toISOString()}`);
+    console.log(`🛡️ Premium Loader v5.5.0 SECURE | Port: ${PORT} | ${new Date().toISOString()}`);
     console.log(`📍 Whitelist: ${config.WHITELIST_USER_IDS.length} | Owners: ${config.OWNER_USER_IDS.length} | Games: ${config.ALLOWED_PLACE_IDS.length || 'ALL'}`);
     console.log(`🔧 Script URL: ${config.SCRIPT_SOURCE_URL ? 'Configured' : 'NOT SET'} | Obfuscated: ${config.SCRIPT_ALREADY_OBFUSCATED}`);
+    console.log(`🔒 Anti-Bot: ENABLED | 3-Step Verification: ACTIVE`);
 });
 
 process.on('SIGTERM', () => process.exit(0));
