@@ -61,6 +61,7 @@ const UNAUTHORIZED_HTML = `<!DOCTYPE html>
     </div>
 </body>
 </html>`;
+
 function generateFakeScript() {
     const r = (l) => { let s = ''; const c = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_'; for (let i = 0; i < l; i++) s += c[Math.floor(Math.random() * c.length)]; return s; };
     const n = () => Math.floor(Math.random() * 99999);
