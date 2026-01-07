@@ -207,9 +207,6 @@ app.post('/api/auth/verify', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, error: "Server error" }); }
 });
 
-// ============================================================
-// 📜 LOADER ENDPOINT - /api/loader.lua
-// ============================================================
 const loaderHandler = (req, res) => {
     if (isBrowser(req)) return res.status(403).type('text/html').send(UNAUTHORIZED_HTML);
     const serverUrl = process.env.RENDER_EXTERNAL_URL || process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
@@ -225,15 +222,27 @@ pcall(main)`;
     res.type('text/plain').send(loaderScript);
 };
 
-// Daftarkan di kedua path
 app.get('/api/loader.lua', loaderHandler);
-app.get('/loader', loaderHandler);  // Backward compatible
+app.get('/loader', loaderHandler);
 
+// ============================================================
+// ✅ FIXED: /script endpoint dengan whitelist check yang benar
+// ============================================================
 app.get('/script', async (req, res) => {
     if (isBrowser(req)) return res.status(403).type('text/html').send(UNAUTHORIZED_HTML);
     const playerIdHeader = getPlayerID(req), hwidHeader = getHWID(req);
+    
+    // ✅ FIX: Check blocked devices first
+    const blockInfo = isDeviceBlocked(req); 
+    if (blockInfo.blocked) return res.type('text/plain').send(`game:GetService("Players").LocalPlayer:Kick("⛔ Banned\\n\\nReason: ${blockInfo.reason}\\nBan ID: ${blockInfo.banId}")`);
+    
+    // ✅ FIX: Check whitelist dan REJECT jika tidak whitelisted
     let isWhitelisted = config.WHITELIST_USER_IDS.length === 0 || (playerIdHeader && config.WHITELIST_USER_IDS.includes(parseInt(playerIdHeader)));
-    if (!isWhitelisted) { const blockInfo = isDeviceBlocked(req); if (blockInfo.blocked) return res.type('text/plain').send(`game:GetService("Players").LocalPlayer:Kick("⛔ Banned\\n\\nReason: ${blockInfo.reason}\\nBan ID: ${blockInfo.banId}")`); }
+    if (!isWhitelisted) { 
+        logAccess(req, 'WHITELIST_REJECTED', false, { playerId: playerIdHeader }); 
+        return res.type('text/plain').send(`game:GetService("StarterGui"):SetCore("SendNotification",{Title="⛔ Not Whitelisted",Text="Your account is not whitelisted",Duration=5}) task.wait(2) game:GetService("Players").LocalPlayer:Kick("⛔ Not Whitelisted\\n\\nYour User ID: ${playerIdHeader || 'Unknown'}\\n\\nContact admin for access")`); 
+    }
+    
     try {
         let script = scriptCache.get('main_script');
         if (!script) {
