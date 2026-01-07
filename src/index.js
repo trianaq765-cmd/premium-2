@@ -83,77 +83,119 @@ function getPlayerID(req) { return req.headers['x-player-id'] || req.query.pid |
 function logAccess(req, action, success, details = {}) { const log = { ip: getClientIP(req), hwid: getHWID(req), playerId: getPlayerID(req), userAgent: req.headers['user-agent']?.substring(0, 100) || 'unknown', action, success, method: req.method, path: req.path, timestamp: new Date().toISOString(), ...details }; db.addLog(log); return log; }
 
 // ============================================================
-// 🛡️ ANTI-BOT: Detect Discord bots, Browsers, Scrapers
+// 🛡️ ANTI-BOT: Validate User-Agent
 // ============================================================
-function isBot(req) {
-    const ua = (req.headers['user-agent'] || '').toLowerCase();
+const BLOCKED_UA_PATTERNS = [
+    'discord', 'crypta', 'mee6', 'dyno', 'carl', 'dank',
+    'bot', 'crawler', 'spider', 'scraper',
+    'python', 'node-fetch', 'axios', 'got', 'request', 'urllib',
+    'curl', 'wget', 'postman', 'insomnia', 'httpie',
+    'mozilla', 'chrome', 'safari', 'firefox', 'edge', 'opera', 'webkit'
+];
+
+const VALID_EXECUTOR_PATTERNS = [
+    'roblox', 'wininet',
+    'synapse', 'syn',
+    'krnl',
+    'fluxus',
+    'delta',
+    'electron',
+    'script-ware', 'scriptware',
+    'sentinel',
+    'oxygen',
+    'evon',
+    'arceus',
+    'hydrogen',
+    'vegax',
+    'trigon',
+    'comet',
+    'solara',
+    'wave',
+    'zorara',
+    'codex',
+    'celery',
+    'swift',
+    'sirhurt',
+    'executor',
+    'exploit'
+];
+
+function isBlockedUA(ua) {
+    if (!ua || ua.length < 3) return { blocked: true, reason: 'empty_ua' };
+    const lowerUA = ua.toLowerCase();
+    for (const pattern of BLOCKED_UA_PATTERNS) {
+        if (lowerUA.includes(pattern)) return { blocked: true, reason: pattern };
+    }
+    return { blocked: false };
+}
+
+function isValidExecutor(ua) {
+    if (!ua) return false;
+    const lowerUA = ua.toLowerCase();
+    return VALID_EXECUTOR_PATTERNS.some(p => lowerUA.includes(p));
+}
+
+function isBrowser(req) {
     const accept = req.headers['accept'] || '';
-    
-    // Discord bots patterns
-    const discordBots = ['discordbot', 'discord', 'crypta', 'mee6', 'dyno', 'carl-bot', 'dank memer'];
-    for (const bot of discordBots) {
-        if (ua.includes(bot)) return { isBot: true, type: 'discord', name: bot };
-    }
-    
-    // Common bots/scrapers
-    const bots = ['bot', 'crawler', 'spider', 'scraper', 'curl', 'wget', 'python', 'node-fetch', 'axios', 'got', 'request', 'http-client', 'postman', 'insomnia'];
-    for (const bot of bots) {
-        if (ua.includes(bot)) return { isBot: true, type: 'scraper', name: bot };
-    }
-    
-    // Browser detection (browsers send Accept-Language, accept text/html)
+    const ua = (req.headers['user-agent'] || '').toLowerCase();
     if (accept.includes('text/html') && req.headers['accept-language']) {
         const browsers = ['mozilla', 'chrome', 'safari', 'firefox', 'edge', 'opera'];
-        for (const browser of browsers) {
-            if (ua.includes(browser)) return { isBot: true, type: 'browser', name: browser };
-        }
+        return browsers.some(b => ua.includes(b));
     }
-    
-    // Empty or suspicious UA
-    if (!ua || ua.length < 5) return { isBot: true, type: 'empty_ua', name: 'unknown' };
-    
-    return { isBot: false };
-}
-
-function isValidExecutor(req) {
-    const ua = (req.headers['user-agent'] || '').toLowerCase();
-    const executors = ['roblox', 'synapse', 'krnl', 'fluxus', 'delta', 'electron', 'script-ware', 'sentinel', 'oxygen', 'evon', 'arceus', 'hydrogen', 'vegax', 'trigon', 'comet', 'solara', 'wave', 'zorara', 'codex', 'celery', 'swift', 'scriptware', 'sirhurt', 'wininet', 'executor', 'exploit'];
-    return executors.some(e => ua.includes(e));
-}
-
-function isBrowser(req) { 
-    const botCheck = isBot(req);
-    if (botCheck.isBot && botCheck.type === 'browser') return true;
     return false;
 }
 
 function secureCompare(a, b) { if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false; try { return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b)); } catch { return false; } }
+
 function isScriptObfuscated(script) { if (!script || typeof script !== 'string') return false; const patterns = [/IronBrew/i, /Prometheus/i, /Moonsec/i, /Luraph/i, /PSU|PaidScriptUploader/i, /Aztup/i, /Synapse Xen/i, /-- Obfuscated/i, /-- Protected/i]; for (const p of patterns) if (p.test(script.substring(0, 500))) return true; const code = [/^local \w{1,3}=\{/, /getfenv\s*\(\s*\d+\s*\)/, /string\.char\s*\(\s*\d+/, /loadstring\s*\(\s*['"]\\x/, /\[\[.{100,}\]\]/]; for (const p of code) if (p.test(script)) return true; if ((script.match(/\\\d{1,3}/g) || []).length > 100 && script.length > 2000) return true; for (const line of script.split('\n')) if (line.length > 10000) return true; if ((script.match(/[a-zA-Z]/g) || []).length / script.length < 0.3 && script.length > 1000) return true; return false; }
+
 function isDeviceBlocked(req) { return blockedDevices.isBlocked(getHWID(req), getClientIP(req), getPlayerID(req)); }
 
 async function verifyRobloxUser(userId) { try { const r = await axios.get(`https://users.roblox.com/v1/users/${userId}`, { timeout: 5000 }); if (r.data?.id) return { valid: true, id: r.data.id, username: r.data.name, displayName: r.data.displayName }; return { valid: false }; } catch { return { valid: true, fallback: true }; } }
 
-app.get('/', (req, res) => { 
-    const botCheck = isBot(req);
-    if (botCheck.isBot) {
-        logAccess(req, 'BOT_BLOCKED', false, { botType: botCheck.type, botName: botCheck.name });
-        return res.status(403).type('text/html').send(UNAUTHORIZED_HTML);
+// ============================================================
+// 🌐 BASIC ENDPOINTS
+// ============================================================
+app.get('/', (req, res) => {
+    if (isBrowser(req)) return res.status(403).type('text/html').send(UNAUTHORIZED_HTML);
+    const blocked = isBlockedUA(req.headers['user-agent']);
+    if (blocked.blocked) {
+        logAccess(req, 'ROOT_BOT_BLOCKED', false, { reason: blocked.reason });
+        return res.status(403).json({ error: "Forbidden" });
     }
-    res.json({ status: "online", version: "5.4.3", protected: true }); 
+    res.json({ status: "online", version: "5.4.4", protected: true });
 });
 
 app.get('/health', (req, res) => { res.json({ status: "ok", uptime: Math.floor(process.uptime()) }); });
-app.get('/api/health', (req, res) => { 
-    const botCheck = isBot(req);
-    if (botCheck.isBot) return res.status(403).json({ error: "Forbidden" });
-    res.json({ status: "healthy", cached: scriptCache.has('main_script'), stats: db.getStats() }); 
-});
-app.get('/debug', (req, res) => { res.json({ status: "ok", version: "5.4.3", config: { hasScriptUrl: !!config.SCRIPT_SOURCE_URL, scriptAlreadyObfuscated: config.SCRIPT_ALREADY_OBFUSCATED, whitelistCount: config.WHITELIST_USER_IDS.length, ownerCount: config.OWNER_USER_IDS.length, allowedGamesCount: config.ALLOWED_PLACE_IDS.length }, stats: db.getStats() }); });
 
+app.get('/api/health', (req, res) => {
+    const blocked = isBlockedUA(req.headers['user-agent']);
+    if (blocked.blocked) return res.status(403).json({ error: "Forbidden" });
+    res.json({ status: "healthy", cached: scriptCache.has('main_script'), stats: db.getStats() });
+});
+
+app.get('/debug', (req, res) => {
+    res.json({
+        status: "ok",
+        version: "5.4.4",
+        config: {
+            hasScriptUrl: !!config.SCRIPT_SOURCE_URL,
+            scriptAlreadyObfuscated: config.SCRIPT_ALREADY_OBFUSCATED,
+            whitelistCount: config.WHITELIST_USER_IDS.length,
+            ownerCount: config.OWNER_USER_IDS.length,
+            allowedGamesCount: config.ALLOWED_PLACE_IDS.length
+        },
+        stats: db.getStats()
+    });
+});
+
+// ============================================================
+// 🔐 AUTH ENDPOINTS
+// ============================================================
 app.post('/api/auth/challenge', async (req, res) => {
-    const botCheck = isBot(req);
-    if (botCheck.isBot) {
-        logAccess(req, 'BOT_BLOCKED_CHALLENGE', false, { botType: botCheck.type });
+    const blocked = isBlockedUA(req.headers['user-agent']);
+    if (blocked.blocked) {
+        logAccess(req, 'CHALLENGE_BOT_BLOCKED', false, { reason: blocked.reason });
         return res.status(403).json({ success: false, error: "Forbidden" });
     }
     try {
@@ -172,9 +214,9 @@ app.post('/api/auth/challenge', async (req, res) => {
 });
 
 app.post('/api/auth/verify', async (req, res) => {
-    const botCheck = isBot(req);
-    if (botCheck.isBot) {
-        logAccess(req, 'BOT_BLOCKED_VERIFY', false, { botType: botCheck.type });
+    const blocked = isBlockedUA(req.headers['user-agent']);
+    if (blocked.blocked) {
+        logAccess(req, 'VERIFY_BOT_BLOCKED', false, { reason: blocked.reason });
         return res.status(403).json({ success: false, error: "Forbidden" });
     }
     try {
@@ -209,25 +251,26 @@ app.post('/api/auth/verify', async (req, res) => {
 });
 
 // ============================================================
-// 📜 LOADER ENDPOINT - Anti-Bot + Fixed Spy Detection
+// 📜 LOADER ENDPOINT - Anti-Bot Protection
 // ============================================================
 const loaderHandler = (req, res) => {
-    // Block bots/browsers/scrapers
-    const botCheck = isBot(req);
-    if (botCheck.isBot) {
-        logAccess(req, 'BOT_BLOCKED_LOADER', false, { botType: botCheck.type, botName: botCheck.name });
+    const ua = req.headers['user-agent'] || '';
+    
+    // ❌ Block bots/browsers/scrapers
+    const blocked = isBlockedUA(ua);
+    if (blocked.blocked) {
+        logAccess(req, 'LOADER_BOT_BLOCKED', false, { ua, reason: blocked.reason });
         return res.status(403).type('text/plain').send('--[[ Access Denied ]]');
     }
     
-    // Require valid executor UA
-    if (!isValidExecutor(req)) {
-        logAccess(req, 'INVALID_EXECUTOR_LOADER', false, { ua: req.headers['user-agent'] });
-        return res.status(403).type('text/plain').send('--[[ Invalid Request ]]');
+    // ✅ Require valid executor UA
+    if (!isValidExecutor(ua)) {
+        logAccess(req, 'LOADER_INVALID_EXECUTOR', false, { ua });
+        return res.status(403).type('text/plain').send('--[[ Invalid Client ]]');
     }
     
     const serverUrl = process.env.RENDER_EXTERNAL_URL || process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
     
-    // Fixed loader - hanya detect spy yang AKTIF (bukan yang tersedia)
     const loaderScript = `local _S="${serverUrl}" 
 local function _c()
     local _cg=game:GetService("CoreGui")
@@ -316,7 +359,7 @@ local function _m()
 end
 task.spawn(function() task.wait(0.1) pcall(_m) end)`;
     
-    logAccess(req, 'LOADER_SERVED', true, { size: loaderScript.length });
+    logAccess(req, 'LOADER_SERVED', true, { size: loaderScript.length, ua });
     res.type('text/plain').send(loaderScript);
 };
 
@@ -324,31 +367,35 @@ app.get('/api/loader.lua', loaderHandler);
 app.get('/loader', loaderHandler);
 
 // ============================================================
-// ✅ FIXED: /script endpoint - Anti-Bot + Whitelist
+// 📜 SCRIPT ENDPOINT - Anti-Bot + Whitelist
 // ============================================================
 app.get('/script', async (req, res) => {
-    // Block bots/browsers/scrapers
-    const botCheck = isBot(req);
-    if (botCheck.isBot) {
-        logAccess(req, 'BOT_BLOCKED_SCRIPT', false, { botType: botCheck.type, botName: botCheck.name });
+    const ua = req.headers['user-agent'] || '';
+    
+    // ❌ Block bots/browsers
+    const blocked = isBlockedUA(ua);
+    if (blocked.blocked) {
+        logAccess(req, 'SCRIPT_BOT_BLOCKED', false, { ua, reason: blocked.reason });
         return res.status(403).type('text/plain').send('--[[ Access Denied ]]');
     }
     
-    // Require valid executor UA
-    if (!isValidExecutor(req)) {
-        logAccess(req, 'INVALID_EXECUTOR_SCRIPT', false, { ua: req.headers['user-agent'] });
-        return res.status(403).type('text/plain').send('--[[ Invalid Request ]]');
+    // ✅ Require valid executor
+    if (!isValidExecutor(ua)) {
+        logAccess(req, 'SCRIPT_INVALID_EXECUTOR', false, { ua });
+        return res.status(403).type('text/plain').send('--[[ Invalid Client ]]');
     }
     
     const playerIdHeader = getPlayerID(req), hwidHeader = getHWID(req);
     
-    const blockInfo = isDeviceBlocked(req); 
+    // Check blocked devices
+    const blockInfo = isDeviceBlocked(req);
     if (blockInfo.blocked) return res.type('text/plain').send(`game:GetService("Players").LocalPlayer:Kick("⛔ Banned\\n\\nReason: ${blockInfo.reason}\\nBan ID: ${blockInfo.banId}")`);
     
+    // ✅ Check whitelist
     let isWhitelisted = config.WHITELIST_USER_IDS.length === 0 || (playerIdHeader && config.WHITELIST_USER_IDS.includes(parseInt(playerIdHeader)));
-    if (!isWhitelisted) { 
-        logAccess(req, 'WHITELIST_REJECTED', false, { playerId: playerIdHeader }); 
-        return res.type('text/plain').send(`game:GetService("StarterGui"):SetCore("SendNotification",{Title="⛔ Not Whitelisted",Text="Your account is not whitelisted",Duration=5}) task.wait(2) game:GetService("Players").LocalPlayer:Kick("⛔ Not Whitelisted\\n\\nYour User ID: ${playerIdHeader || 'Unknown'}\\n\\nContact admin for access")`); 
+    if (!isWhitelisted) {
+        logAccess(req, 'WHITELIST_REJECTED', false, { playerId: playerIdHeader });
+        return res.type('text/plain').send(`game:GetService("StarterGui"):SetCore("SendNotification",{Title="⛔ Not Whitelisted",Text="Your account is not whitelisted",Duration=5}) task.wait(2) game:GetService("Players").LocalPlayer:Kick("⛔ Not Whitelisted\\n\\nYour User ID: ${playerIdHeader || 'Unknown'}\\n\\nContact admin for access")`);
     }
     
     try {
@@ -429,6 +476,9 @@ ${script}`;
     } catch { res.type('text/plain').send(`game:GetService("StarterGui"):SetCore("SendNotification",{Title="❌ Error",Text="Unexpected error",Duration=5})`); }
 });
 
+// ============================================================
+// 🚫 BAN ENDPOINT
+// ============================================================
 app.post('/api/ban', (req, res) => {
     try {
         const { hwid, ip, playerId, playerName, reason, toolsDetected } = req.body;
@@ -440,6 +490,9 @@ app.post('/api/ban', (req, res) => {
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
+// ============================================================
+// 👑 ADMIN ENDPOINTS
+// ============================================================
 function adminAuth(req, res, next) { const k = req.headers['x-admin-key'] || req.query.key; if (!k) return res.status(401).json({ error: "Admin key required" }); if (!secureCompare(k, config.ADMIN_KEY)) return res.status(403).json({ error: "Invalid admin key" }); next(); }
 
 app.get('/api/admin/stats', adminAuth, (req, res) => { res.json({ success: true, stats: db.getStats(), config: { hasScriptUrl: !!config.SCRIPT_SOURCE_URL, scriptAlreadyObfuscated: config.SCRIPT_ALREADY_OBFUSCATED, whitelistCount: config.WHITELIST_USER_IDS.length, ownerCount: config.OWNER_USER_IDS.length }, server: { uptime: Math.floor(process.uptime()) + 's', memory: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB' } }); });
@@ -453,14 +506,27 @@ app.post('/api/admin/refresh', adminAuth, async (req, res) => { try { scriptCach
 app.get('/api/admin/whitelist', adminAuth, (req, res) => { res.json({ success: true, whitelist: config.WHITELIST_USER_IDS, count: config.WHITELIST_USER_IDS.length }); });
 app.get('/api/admin/user/:userId', adminAuth, async (req, res) => { try { const userId = parseInt(req.params.userId); const userInfo = await verifyRobloxUser(userId); res.json({ success: true, user: { ...userInfo, isWhitelisted: config.WHITELIST_USER_IDS.includes(userId), isOwner: config.OWNER_USER_IDS.includes(userId) } }); } catch (error) { res.status(500).json({ success: false, error: error.message }); } });
 
-app.use('*', (req, res) => { 
-    const botCheck = isBot(req);
-    if (botCheck.isBot) return res.status(404).type('text/plain').send('--[[ Not Found ]]');
-    res.status(404).json({ error: "Not found" }); 
+// ============================================================
+// 404 Handler
+// ============================================================
+app.use('*', (req, res) => {
+    const blocked = isBlockedUA(req.headers['user-agent']);
+    if (blocked.blocked) return res.status(404).type('text/plain').send('--[[ Not Found ]]');
+    if (isBrowser(req)) return res.status(404).type('text/html').send(UNAUTHORIZED_HTML);
+    res.status(404).json({ error: "Not found" });
 });
 
+// ============================================================
+// 🚀 START SERVER
+// ============================================================
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => { console.log(`🛡️ Premium Loader v5.4.3 | Port: ${PORT} | ${new Date().toISOString()}`); console.log(`📍 Whitelist: ${config.WHITELIST_USER_IDS.length} | Owners: ${config.OWNER_USER_IDS.length} | Games: ${config.ALLOWED_PLACE_IDS.length || 'ALL'}`); console.log(`🔧 Script URL: ${config.SCRIPT_SOURCE_URL ? 'Configured' : 'NOT SET'} | Obfuscated: ${config.SCRIPT_ALREADY_OBFUSCATED}`); });
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🛡️ Premium Loader v5.4.4 | Port: ${PORT} | ${new Date().toISOString()}`);
+    console.log(`📍 Whitelist: ${config.WHITELIST_USER_IDS.length} | Owners: ${config.OWNER_USER_IDS.length} | Games: ${config.ALLOWED_PLACE_IDS.length || 'ALL'}`);
+    console.log(`🔧 Script URL: ${config.SCRIPT_SOURCE_URL ? 'Configured' : 'NOT SET'} | Obfuscated: ${config.SCRIPT_ALREADY_OBFUSCATED}`);
+});
+
 process.on('SIGTERM', () => process.exit(0));
 process.on('SIGINT', () => process.exit(0));
+
 module.exports = app;
