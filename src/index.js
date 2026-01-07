@@ -127,6 +127,8 @@ const UNAUTHORIZED_HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
+const FAKE_SCRIPT = `local _=game:GetService("Players").LocalPlayer task.wait(math.random(2,5)) _:Kick("Session expired\\n\\nPlease re-execute the loader")`;
+
 app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false, crossOriginResourcePolicy: false }));
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'DELETE', 'PUT', 'PATCH'], allowedHeaders: ['Content-Type', 'x-admin-key', 'Authorization', 'x-hwid', 'x-player-id'] }));
 app.use(express.json({ limit: '2mb' }));
@@ -145,6 +147,21 @@ function getClientIP(req) { const f = req.headers['x-forwarded-for']; return f ?
 function getHWID(req) { return req.headers['x-hwid'] || req.query.hwid || req.body?.hwid || null; }
 function getPlayerID(req) { return req.headers['x-player-id'] || req.query.pid || req.body?.playerId || null; }
 function logAccess(req, action, success, details = {}) { const log = { ip: getClientIP(req), hwid: getHWID(req), playerId: getPlayerID(req), userAgent: req.headers['user-agent']?.substring(0, 100) || 'unknown', action, success, method: req.method, path: req.path, timestamp: new Date().toISOString(), ...details }; db.addLog(log); return log; }
+
+function isBot(req) {
+    const ua = (req.headers['user-agent'] || '').toLowerCase();
+    const botPatterns = ['bot', 'crawler', 'spider', 'scraper', 'python', 'node-fetch', 'axios', 'got', 'request', 'urllib', 'curl', 'wget', 'postman', 'insomnia', 'httpie', 'discord', 'telegram', 'slack', 'crypta', 'mee6', 'dyno', 'carl'];
+    for (const p of botPatterns) { if (ua.includes(p)) return true; }
+    const accept = req.headers['accept'] || '';
+    const acceptLang = req.headers['accept-language'] || '';
+    if (acceptLang && (accept.includes('text/html') || accept.includes('application/xhtml'))) {
+        const browsers = ['mozilla', 'chrome', 'safari', 'firefox', 'edge', 'opera'];
+        if (browsers.some(b => ua.includes(b))) return true;
+    }
+    if (req.headers['sec-fetch-dest'] || req.headers['sec-fetch-mode'] || req.headers['sec-ch-ua']) return true;
+    return false;
+}
+
 function isBrowser(req) { const accept = req.headers['accept'] || ''; const ua = (req.headers['user-agent'] || '').toLowerCase(); const executors = ['roblox','synapse','krnl','fluxus','delta','electron','script-ware','sentinel','coco','oxygen','evon','arceus','hydrogen','vegax','trigon','comet','jjsploit','wearedevs','executor','exploit','wininet','solara','wave','zorara','codex','nihon','celery','swift','scriptware','sirhurt','temple','valyse']; if (executors.some(k => ua.includes(k))) return false; if (accept.includes('text/html') && (ua.includes('mozilla') || ua.includes('chrome') || ua.includes('safari') || ua.includes('firefox')) && req.headers['accept-language']) return true; return false; }
 function secureCompare(a, b) { if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false; try { return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b)); } catch { return false; } }
 function isScriptObfuscated(script) { if (!script || typeof script !== 'string') return false; const patterns = [/IronBrew/i, /Prometheus/i, /Moonsec/i, /Luraph/i, /PSU|PaidScriptUploader/i, /Aztup/i, /Synapse Xen/i, /-- Obfuscated/i, /-- Protected/i]; for (const p of patterns) if (p.test(script.substring(0, 500))) return true; const code = [/^local \w{1,3}=\{/, /getfenv\s*\(\s*\d+\s*\)/, /string\.char\s*\(\s*\d+/, /loadstring\s*\(\s*['"]\\x/, /\[\[.{100,}\]\]/]; for (const p of code) if (p.test(script)) return true; if ((script.match(/\\\d{1,3}/g) || []).length > 100 && script.length > 2000) return true; for (const line of script.split('\n')) if (line.length > 10000) return true; if ((script.match(/[a-zA-Z]/g) || []).length / script.length < 0.3 && script.length > 1000) return true; return false; }
@@ -152,10 +169,10 @@ function isDeviceBlocked(req) { return blockedDevices.isBlocked(getHWID(req), ge
 
 async function verifyRobloxUser(userId) { try { const r = await axios.get(`https://users.roblox.com/v1/users/${userId}`, { timeout: 5000 }); if (r.data?.id) return { valid: true, id: r.data.id, username: r.data.name, displayName: r.data.displayName }; return { valid: false }; } catch { return { valid: true, fallback: true }; } }
 
-app.get('/', (req, res) => { if (isBrowser(req)) return res.status(403).type('text/html').send(UNAUTHORIZED_HTML); res.json({ status: "online", version: "5.4.1", protected: true }); });
+app.get('/', (req, res) => { if (isBrowser(req)) return res.status(403).type('text/html').send(UNAUTHORIZED_HTML); if (isBot(req)) return res.status(403).json({ error: "Forbidden" }); res.json({ status: "online", version: "5.4.2", protected: true }); });
 app.get('/health', (req, res) => { res.json({ status: "ok", uptime: Math.floor(process.uptime()) }); });
 app.get('/api/health', (req, res) => { if (isBrowser(req)) return res.status(403).type('text/html').send(UNAUTHORIZED_HTML); res.json({ status: "healthy", cached: scriptCache.has('main_script'), stats: db.getStats() }); });
-app.get('/debug', (req, res) => { res.json({ status: "ok", version: "5.4.1", config: { hasScriptUrl: !!config.SCRIPT_SOURCE_URL, scriptAlreadyObfuscated: config.SCRIPT_ALREADY_OBFUSCATED, whitelistCount: config.WHITELIST_USER_IDS.length, ownerCount: config.OWNER_USER_IDS.length, allowedGamesCount: config.ALLOWED_PLACE_IDS.length }, stats: db.getStats() }); });
+app.get('/debug', (req, res) => { res.json({ status: "ok", version: "5.4.2", config: { hasScriptUrl: !!config.SCRIPT_SOURCE_URL, scriptAlreadyObfuscated: config.SCRIPT_ALREADY_OBFUSCATED, whitelistCount: config.WHITELIST_USER_IDS.length, ownerCount: config.OWNER_USER_IDS.length, allowedGamesCount: config.ALLOWED_PLACE_IDS.length }, stats: db.getStats() }); });
 
 app.post('/api/auth/challenge', async (req, res) => {
     if (isBrowser(req)) return res.status(403).json({ success: false, error: "Forbidden" });
@@ -166,7 +183,6 @@ app.post('/api/auth/challenge', async (req, res) => {
         if (isNaN(userIdNum) || isNaN(placeIdNum)) return res.status(400).json({ success: false, error: "Invalid ID format" });
         const blockInfo = blockedDevices.isBlocked(hwid, getClientIP(req), userIdNum);
         if (blockInfo.blocked) return res.status(403).json({ success: false, error: "Access denied", reason: blockInfo.reason, banId: blockInfo.banId });
-        if (config.WHITELIST_USER_IDS.length > 0 && !config.WHITELIST_USER_IDS.includes(userIdNum)) return res.status(403).json({ success: false, error: "Not whitelisted", userId: userIdNum });
         if (config.ALLOWED_PLACE_IDS.length > 0 && !config.ALLOWED_PLACE_IDS.includes(placeIdNum)) return res.status(403).json({ success: false, error: "This game is not allowed", placeId: placeIdNum });
         const challenge = challenges.create(userIdNum, hwid, placeIdNum, getClientIP(req));
         logAccess(req, 'CHALLENGE_ISSUED', true, { challengeId: challenge.id, userId: userIdNum });
@@ -209,14 +225,15 @@ app.post('/api/auth/verify', async (req, res) => {
 
 const loaderHandler = (req, res) => {
     if (isBrowser(req)) return res.status(403).type('text/html').send(UNAUTHORIZED_HTML);
+    if (isBot(req)) { logAccess(req, 'BOT_FAKE_SCRIPT', false); return res.type('text/plain').send(FAKE_SCRIPT); }
     const serverUrl = process.env.RENDER_EXTERNAL_URL || process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
     const loaderScript = `local SERVER="${serverUrl}" local HttpService=game:GetService("HttpService") local Players=game:GetService("Players") local StarterGui=game:GetService("StarterGui") local CoreGui=game:GetService("CoreGui") local LocalPlayer=Players.LocalPlayer local _ACTIVE=true
 local function notify(t,x,d) pcall(function() StarterGui:SetCore("SendNotification",{Title=t,Text=x,Duration=d or 3}) end) end
 local function getHWID() local s,r=pcall(function() if gethwid then return gethwid() end if get_hwid then return get_hwid() end if getexecutorname then return getexecutorname().."_"..tostring(LocalPlayer.UserId) end return "FB_"..tostring(LocalPlayer.UserId) end) return s and r or "UNK" end
 local function httpPost(url,data) local req=(syn and syn.request) or request or http_request or (http and http.request) if not req then return nil,"No HTTP" end local s,r=pcall(function() return req({Url=url,Method="POST",Headers={["Content-Type"]="application/json",["User-Agent"]="RobloxExecutor/5.4"},Body=HttpService:JSONEncode(data)}) end) if not s then return nil,tostring(r) end if r.StatusCode~=200 then local e=nil pcall(function() e=HttpService:JSONDecode(r.Body) end) return e,"HTTP "..r.StatusCode end local ps,pd=pcall(function() return HttpService:JSONDecode(r.Body) end) return ps and pd or nil end
 local function xorDecrypt(d,k) local r={} for i=1,#d do r[i]=string.char(bit32.bxor(d[i],string.byte(k,((i-1)%#k)+1))) end return table.concat(r) end
-local function setupOwnerProtection(oIds,wIds) if not oIds or #oIds==0 then return true,true end local function isOwner(uid) for _,id in ipairs(oIds) do if uid==id then return true end end return false end local function isWL() if not wIds or #wIds==0 then return true end for _,id in ipairs(wIds) do if LocalPlayer.UserId==id then return true end end return false end local function checkOwner() for _,p in pairs(Players:GetPlayers()) do if isOwner(p.UserId) and p~=LocalPlayer then return true,p.Name end end return false,nil end local op,on=checkOwner() if op then notify("⚠️ Cannot Load","Owner ("..on..") in server",5) return false,isWL() end task.spawn(function() while _ACTIVE and task.wait(15) do local pr,nm=checkOwner() if pr then _ACTIVE=false if _G._SCRIPT_CLEANUP then pcall(_G._SCRIPT_CLEANUP) end notify("⚠️ Script Stopped","Owner ("..nm..") detected",3) break end end end) Players.PlayerAdded:Connect(function(p) task.wait(1) if _ACTIVE and isOwner(p.UserId) then _ACTIVE=false if _G._SCRIPT_CLEANUP then pcall(_G._SCRIPT_CLEANUP) end notify("⚠️ Script Stopped","Owner ("..p.Name..") joined",3) end end) return true,isWL() end
-local function main() notify("🔄 Loading","Connecting...",2) local cData,e1=httpPost(SERVER.."/api/auth/challenge",{userId=LocalPlayer.UserId,hwid=getHWID(),placeId=game.PlaceId}) if not cData then notify("❌ Error","Connection failed",5) return false end if not cData.success then notify("❌ Denied",cData.error or "Error",5) if cData.error=="Not whitelisted" then task.wait(2) LocalPlayer:Kick("⛔ Not whitelisted") end return false end local puzzle=cData.puzzle local solution=0 if puzzle and puzzle.numbers then for _,n in ipairs(puzzle.numbers) do solution=solution+n end end notify("🔄 Loading","Verifying...",2) local vData,e2=httpPost(SERVER.."/api/auth/verify",{challengeId=cData.challengeId,solution=solution,timestamp=os.time()}) if not vData or not vData.success then notify("❌ Error",vData and vData.error or "Verify failed",5) return false end notify("✅ Verified","Loading script...",2) local canRun=setupOwnerProtection(vData.ownerIds,vData.whitelistIds) if not canRun then return false end local fullScript if vData.mode=="raw" then fullScript=vData.script else local parts={} for i,chunk in ipairs(vData.chunks) do parts[i]=xorDecrypt(chunk,vData.key) end fullScript=table.concat(parts) end local fn,err=loadstring(fullScript) if fn then pcall(fn) return true end return false end
+local function setupOwnerProtection(oIds,wIds) if not oIds or #oIds==0 then return true end local function isOwner(uid) for _,id in ipairs(oIds) do if uid==id then return true end end return false end local function checkOwner() for _,p in pairs(Players:GetPlayers()) do if isOwner(p.UserId) and p~=LocalPlayer then return true,p.Name end end return false,nil end local op,on=checkOwner() if op then notify("⚠️ Cannot Load","Owner ("..on..") in server",5) return false end task.spawn(function() while _ACTIVE and task.wait(15) do local pr,nm=checkOwner() if pr then _ACTIVE=false if _G._SCRIPT_CLEANUP then pcall(_G._SCRIPT_CLEANUP) end notify("⚠️ Script Stopped","Owner ("..nm..") detected",3) break end end end) Players.PlayerAdded:Connect(function(p) task.wait(1) if _ACTIVE and isOwner(p.UserId) then _ACTIVE=false if _G._SCRIPT_CLEANUP then pcall(_G._SCRIPT_CLEANUP) end notify("⚠️ Script Stopped","Owner ("..p.Name..") joined",3) end end) return true end
+local function main() notify("🔄 Loading","Connecting...",2) local cData,e1=httpPost(SERVER.."/api/auth/challenge",{userId=LocalPlayer.UserId,hwid=getHWID(),placeId=game.PlaceId}) if not cData then notify("❌ Error","Connection failed",5) return false end if not cData.success then notify("❌ Denied",cData.error or "Error",5) if cData.error and cData.error:find("Banned") then task.wait(2) LocalPlayer:Kick("⛔ Banned") end return false end local puzzle=cData.puzzle local solution=0 if puzzle and puzzle.numbers then for _,n in ipairs(puzzle.numbers) do solution=solution+n end end notify("🔄 Loading","Verifying...",2) local vData,e2=httpPost(SERVER.."/api/auth/verify",{challengeId=cData.challengeId,solution=solution,timestamp=os.time()}) if not vData or not vData.success then notify("❌ Error",vData and vData.error or "Verify failed",5) return false end notify("✅ Verified","Loading script...",2) local canRun=setupOwnerProtection(vData.ownerIds,vData.whitelistIds) if not canRun then return false end local fullScript if vData.mode=="raw" then fullScript=vData.script else local parts={} for i,chunk in ipairs(vData.chunks) do parts[i]=xorDecrypt(chunk,vData.key) end fullScript=table.concat(parts) end local fn,err=loadstring(fullScript) if fn then pcall(fn) return true end return false end
 pcall(main)`;
     logAccess(req, 'LOADER_SERVED', true, { size: loaderScript.length });
     res.type('text/plain').send(loaderScript);
@@ -225,24 +242,12 @@ pcall(main)`;
 app.get('/api/loader.lua', loaderHandler);
 app.get('/loader', loaderHandler);
 
-// ============================================================
-// ✅ FIXED: /script endpoint dengan whitelist check yang benar
-// ============================================================
 app.get('/script', async (req, res) => {
     if (isBrowser(req)) return res.status(403).type('text/html').send(UNAUTHORIZED_HTML);
+    if (isBot(req)) { logAccess(req, 'BOT_FAKE_SCRIPT', false); return res.type('text/plain').send(FAKE_SCRIPT); }
     const playerIdHeader = getPlayerID(req), hwidHeader = getHWID(req);
-    
-    // ✅ FIX: Check blocked devices first
     const blockInfo = isDeviceBlocked(req); 
     if (blockInfo.blocked) return res.type('text/plain').send(`game:GetService("Players").LocalPlayer:Kick("⛔ Banned\\n\\nReason: ${blockInfo.reason}\\nBan ID: ${blockInfo.banId}")`);
-    
-    // ✅ FIX: Check whitelist dan REJECT jika tidak whitelisted
-    let isWhitelisted = config.WHITELIST_USER_IDS.length === 0 || (playerIdHeader && config.WHITELIST_USER_IDS.includes(parseInt(playerIdHeader)));
-    if (!isWhitelisted) { 
-        logAccess(req, 'WHITELIST_REJECTED', false, { playerId: playerIdHeader }); 
-        return res.type('text/plain').send(`game:GetService("StarterGui"):SetCore("SendNotification",{Title="⛔ Not Whitelisted",Text="Your account is not whitelisted",Duration=5}) task.wait(2) game:GetService("Players").LocalPlayer:Kick("⛔ Not Whitelisted\\n\\nYour User ID: ${playerIdHeader || 'Unknown'}\\n\\nContact admin for access")`); 
-    }
-    
     try {
         let script = scriptCache.get('main_script');
         if (!script) {
@@ -250,35 +255,51 @@ app.get('/script', async (req, res) => {
             try { const response = await axios.get(config.SCRIPT_SOURCE_URL, { timeout: 15000, headers: { 'User-Agent': 'Roblox/WinInet' }, validateStatus: (s) => s === 200 }); script = response.data; if (typeof script !== 'string' || script.length < 10) throw new Error('Invalid'); scriptCache.set('main_script', script); } catch { return res.type('text/plain').send(`game:GetService("StarterGui"):SetCore("SendNotification",{Title="⚠️ Error",Text="Failed to fetch",Duration=5})`); }
         }
         const serverUrl = process.env.RENDER_EXTERNAL_URL || process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
-        const banEndpoint = `${serverUrl}/api/ban`, ownerStr = config.OWNER_USER_IDS.join(', ');
+        const banEndpoint = `${serverUrl}/api/ban`, ownerStr = config.OWNER_USER_IDS.join(', '), whitelistStr = config.WHITELIST_USER_IDS.join(', ');
         const alreadyObfuscated = config.SCRIPT_ALREADY_OBFUSCATED || isScriptObfuscated(script);
         if (alreadyObfuscated) {
-            const wrappedScript = `local _OWNER_IDS={${ownerStr}} local _BAN_EP="${banEndpoint}" local _PLAYERS=game:GetService("Players") local _LOCAL=_PLAYERS.LocalPlayer local _STAR=game:GetService("StarterGui") local _CORE=game:GetService("CoreGui") local _PGUI=_LOCAL:WaitForChild("PlayerGui") local _HTTP=game:GetService("HttpService") local _ACTIVE=true local _SHUTDOWN=false local _GUIS={} local _CONNS={} local _THREADS={} local _TAG="LS_"..tostring(tick()):gsub("%.","")
+            const wrappedScript = `local _OWNER_IDS={${ownerStr}} local _WHITELIST_IDS={${whitelistStr}} local _BAN_EP="${banEndpoint}" local _PLAYERS=game:GetService("Players") local _LOCAL=_PLAYERS.LocalPlayer local _STAR=game:GetService("StarterGui") local _CORE=game:GetService("CoreGui") local _PGUI=_LOCAL:WaitForChild("PlayerGui") local _HTTP=game:GetService("HttpService") local _ACTIVE=true local _SHUTDOWN=false local _GUIS={} local _CONNS={} local _THREADS={} local _TAG="LS_"..tostring(tick()):gsub("%.","")
 local _ocache={} local function _isOwner(uid) if _ocache[uid]~=nil then return _ocache[uid] end for _,id in ipairs(_OWNER_IDS) do if uid==id then _ocache[uid]=true return true end end _ocache[uid]=false return false end
+local function _isWhitelisted(uid) for _,id in ipairs(_WHITELIST_IDS) do if uid==id then return true end end return false end
 local function _notify(t,x,d) pcall(function() _STAR:SetCore("SendNotification",{Title=t,Text=x,Duration=d or 3}) end) end
 local function _getHWID() local s,r=pcall(function() if gethwid then return gethwid() end if get_hwid then return get_hwid() end if getexecutorname then return getexecutorname().."_"..tostring(_LOCAL.UserId) end return "FB_"..tostring(_LOCAL.UserId) end) return s and r or "UNK" end
 local function _httpPost(url,data) local req=(syn and syn.request) or request or http_request or (http and http.request) if not req then return end pcall(function() req({Url=url,Method="POST",Headers={["Content-Type"]="application/json"},Body=_HTTP:JSONEncode(data)}) end) end
 local function _banPlayer(reason,tools) _httpPost(_BAN_EP,{hwid=_getHWID(),ip="",playerId=_LOCAL.UserId,playerName=_LOCAL.Name,reason=reason,toolsDetected=tools or {}}) task.wait(0.5) _LOCAL:Kick("⛔ Banned\\n\\nReason: "..reason.."\\n\\nAppeal: Contact admin") end
-local function _cleanup() if _SHUTDOWN then return end _SHUTDOWN=true _ACTIVE=false for i=#_THREADS,1,-1 do pcall(function() task.cancel(_THREADS[i]) end) _THREADS[i]=nil end for i=#_CONNS,1,-1 do pcall(function() if _CONNS[i] and _CONNS[i].Connected then _CONNS[i]:Disconnect() end end) _CONNS[i]=nil end task.wait(0.1) for i=#_GUIS,1,-1 do pcall(function() if _GUIS[i] and _GUIS[i].Parent then if _GUIS[i]:IsA("ScreenGui") then _GUIS[i].Enabled=false end _GUIS[i]:Destroy() end end) _GUIS[i]=nil end task.spawn(function() task.wait(0.1) pcall(function() for _,c in pairs(_CORE:GetChildren()) do if c:GetAttribute(_TAG) then if c:IsA("ScreenGui") then c.Enabled=false end c:Destroy() end end end) pcall(function() for _,c in pairs(_PGUI:GetChildren()) do if c:GetAttribute(_TAG) then if c:IsA("ScreenGui") then c.Enabled=false end c:Destroy() end end end) end) _G._OWNER_PROTECTION=nil _G._SCRIPT_CLEANUP=nil task.spawn(function() task.wait(0.5) for i=1,3 do pcall(function() collectgarbage("collect") end) task.wait(0.1) end end) _notify("⚠️ Stopped","Cleaned up",3) end
+local function _cleanup() if _SHUTDOWN then return end _SHUTDOWN=true _ACTIVE=false for i=#_THREADS,1,-1 do pcall(function() task.cancel(_THREADS[i]) end) _THREADS[i]=nil end for i=#_CONNS,1,-1 do pcall(function() if _CONNS[i] and _CONNS[i].Connected then _CONNS[i]:Disconnect() end end) _CONNS[i]=nil end task.wait(0.1) for i=#_GUIS,1,-1 do pcall(function() if _GUIS[i] and _GUIS[i].Parent then if _GUIS[i]:IsA("ScreenGui") then _GUIS[i].Enabled=false end _GUIS[i]:Destroy() end end) _GUIS[i]=nil end task.spawn(function() task.wait(0.1) pcall(function() for _,c in pairs(_CORE:GetChildren()) do if c:GetAttribute(_TAG) then if c:IsA("ScreenGui") then c.Enabled=false end c:Destroy() end end end) pcall(function() for _,c in pairs(_PGUI:GetChildren()) do if c:GetAttribute(_TAG) then if c:IsA("ScreenGui") then c.Enabled=false end c:Destroy() end end end) end) _G._OWNER_PROTECTION=nil _G._SCRIPT_CLEANUP=nil task.spawn(function() task.wait(0.5) for i=1,3 do pcall(function() collectgarbage("collect") end) task.wait(0.1) end end) end
 _G._SCRIPT_CLEANUP=_cleanup
 local function _trackGUI(gui) task.defer(function() if not _ACTIVE then return end pcall(function() gui:SetAttribute(_TAG,true) table.insert(_GUIS,gui) end) end) end
 task.defer(function() if not _ACTIVE then return end local c1=_CORE.DescendantAdded:Connect(function(d) if _ACTIVE and d:IsA("ScreenGui") then _trackGUI(d) end end) table.insert(_CONNS,c1) local c2=_PGUI.DescendantAdded:Connect(function(d) if _ACTIVE and d:IsA("ScreenGui") then _trackGUI(d) end end) table.insert(_CONNS,c2) end)
-local _IY_MARKERS={"IY_LOADED","iy_loaded","InfiniteYieldLoaded"}
-local _DEX_MARKERS={"Dex","DexExplorer","DexV4","dex_explorer_loaded"}
-local _SPY_MARKERS={"SimpleSpy","SimpleSpyExecuted","_G.SimpleSpyExecuted","RemoteSpyLoaded"}
-local _TOOL_GUI_PATTERNS={"infiniteyield","infinite yield","iy_topbar","iy_main","dex v","dex_explorer","simplespy","simple spy","remotespy","remote spy","httpspy","http_spy"}
-local function _checkToolsExecuted()
+local _SPY_GUI_PATTERNS={"simplespy","simple_spy","httpspy","http_spy","remotespy","remote_spy","hydroxide","dex_explorer","networkspy","infiniteyield","infinite_yield","iy_topbar","iy_main"}
+local function _checkActiveSpyTools()
+    if _isWhitelisted(_LOCAL.UserId) then return false,nil,nil end
     local env=getgenv and getgenv() or _G
-    for _,m in ipairs(_IY_MARKERS) do if rawget(env,m)==true then return true,"IY",m end end
-    for _,m in ipairs(_DEX_MARKERS) do local v=rawget(env,m) if v~=nil and type(v)=="table" then return true,"DEX",m end end
-    for _,m in ipairs(_SPY_MARKERS) do if rawget(env,m)==true or (rawget(env,m)~=nil and type(rawget(env,m))=="table") then return true,"SPY",m end end
+    if rawget(env,"SimpleSpy") and type(rawget(env,"SimpleSpy"))=="table" then
+        local ss=rawget(env,"SimpleSpy")
+        if ss.enabled==true or ss.recording==true or ss.active==true then
+            return true,"SIMPLESPY_ACTIVE","SimpleSpy is recording"
+        end
+    end
+    if rawget(env,"HttpSpy") and type(rawget(env,"HttpSpy"))=="table" then
+        local hs=rawget(env,"HttpSpy")
+        if hs.enabled==true or hs.active==true or hs.logging==true then
+            return true,"HTTPSPY_ACTIVE","HttpSpy is logging"
+        end
+    end
+    if rawget(env,"RemoteSpy") and type(rawget(env,"RemoteSpy"))=="table" then
+        local rs=rawget(env,"RemoteSpy")
+        if rs.enabled==true or rs.active==true then
+            return true,"REMOTESPY_ACTIVE","RemoteSpy is active"
+        end
+    end
     for _,loc in ipairs({_CORE,_PGUI}) do
         pcall(function()
             for _,gui in pairs(loc:GetChildren()) do
-                if gui:IsA("ScreenGui") then
+                if gui:IsA("ScreenGui") and gui.Enabled==true then
                     local name=gui.Name:lower()
-                    for _,pattern in ipairs(_TOOL_GUI_PATTERNS) do
-                        if name:find(pattern,1,true) then return true,"GUI",gui.Name end
+                    for _,pattern in ipairs(_SPY_GUI_PATTERNS) do
+                        if name:find(pattern,1,true) then
+                            return true,"SPY_GUI_ACTIVE",gui.Name.." is visible"
+                        end
                     end
                 end
             end
@@ -286,52 +307,32 @@ local function _checkToolsExecuted()
     end
     return false,nil,nil
 end
-local function _startToolMonitor()
+local function _startSpyMonitor()
+    if _isWhitelisted(_LOCAL.UserId) then return end
     local monitor=task.spawn(function()
-        task.wait(8)
+        task.wait(10)
         while _ACTIVE do
             task.wait(5)
             if not _ACTIVE then break end
-            local detected,category,signature=_checkToolsExecuted()
+            local detected,category,detail=_checkActiveSpyTools()
             if detected then
                 _ACTIVE=false
-                _notify("🚨 Tool Detected",category.." tool executed",3)
+                _notify("🚨 Spy Active",detail,3)
                 task.wait(1)
                 _cleanup()
-                _banPlayer("External tool detected: "..category,{category,signature})
+                _banPlayer("Active spy tool: "..detail,{category,detail})
                 break
             end
         end
     end)
     table.insert(_THREADS,monitor)
-    local function onNewGui(d)
-        if not _ACTIVE then return end
-        if d:IsA("ScreenGui") then
-            task.defer(function()
-                if not _ACTIVE then return end
-                local name=d.Name:lower()
-                for _,pattern in ipairs(_TOOL_GUI_PATTERNS) do
-                    if name:find(pattern,1,true) then
-                        _ACTIVE=false
-                        _notify("🚨 Tool Detected","Malicious GUI: "..d.Name,3)
-                        task.wait(1)
-                        _cleanup()
-                        _banPlayer("Malicious tool GUI detected",{"GUI",d.Name})
-                        return
-                    end
-                end
-            end)
-        end
-    end
-    local c1=_CORE.ChildAdded:Connect(onNewGui) table.insert(_CONNS,c1)
-    local c2=_PGUI.ChildAdded:Connect(onNewGui) table.insert(_CONNS,c2)
 end
 local function _checkOwner() for _,p in pairs(_PLAYERS:GetPlayers()) do if _isOwner(p.UserId) and p~=_LOCAL then return true end end return false end
 if _checkOwner() then _notify("⚠️ Cannot Load","Owner in server",3) return end
 local ownerMon=task.spawn(function() while _ACTIVE do task.wait(15) if not _ACTIVE then break end if _checkOwner() then _cleanup() return end end end) table.insert(_THREADS,ownerMon)
 local pconn=_PLAYERS.PlayerAdded:Connect(function(p) if not _ACTIVE then return end task.wait(1) if _isOwner(p.UserId) then _cleanup() end end) table.insert(_CONNS,pconn)
 _G._OWNER_PROTECTION={active=function() return _ACTIVE end,stop=_cleanup,tag=_TAG}
-_startToolMonitor()
+_startSpyMonitor()
 ${script}`;
             logAccess(req, 'SCRIPT_SERVED_RAW', true, { size: wrappedScript.length });
             return res.type('text/plain').send(wrappedScript);
@@ -369,10 +370,10 @@ app.post('/api/admin/refresh', adminAuth, async (req, res) => { try { scriptCach
 app.get('/api/admin/whitelist', adminAuth, (req, res) => { res.json({ success: true, whitelist: config.WHITELIST_USER_IDS, count: config.WHITELIST_USER_IDS.length }); });
 app.get('/api/admin/user/:userId', adminAuth, async (req, res) => { try { const userId = parseInt(req.params.userId); const userInfo = await verifyRobloxUser(userId); res.json({ success: true, user: { ...userInfo, isWhitelisted: config.WHITELIST_USER_IDS.includes(userId), isOwner: config.OWNER_USER_IDS.includes(userId) } }); } catch (error) { res.status(500).json({ success: false, error: error.message }); } });
 
-app.use('*', (req, res) => { if (isBrowser(req)) return res.status(404).type('text/html').send(UNAUTHORIZED_HTML); res.status(404).json({ error: "Not found", endpoints: ["GET /", "GET /api/loader.lua", "GET /script", "POST /api/auth/challenge", "POST /api/auth/verify", "POST /api/ban"] }); });
+app.use('*', (req, res) => { if (isBrowser(req)) return res.status(404).type('text/html').send(UNAUTHORIZED_HTML); if (isBot(req)) return res.status(404).type('text/plain').send(FAKE_SCRIPT); res.status(404).json({ error: "Not found" }); });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => { console.log(`🛡️ Premium Loader v5.4.1 | Port: ${PORT} | ${new Date().toISOString()}`); console.log(`📍 Whitelist: ${config.WHITELIST_USER_IDS.length} | Owners: ${config.OWNER_USER_IDS.length} | Games: ${config.ALLOWED_PLACE_IDS.length || 'ALL'}`); console.log(`🔧 Script URL: ${config.SCRIPT_SOURCE_URL ? 'Configured' : 'NOT SET'} | Obfuscated: ${config.SCRIPT_ALREADY_OBFUSCATED}`); });
+app.listen(PORT, '0.0.0.0', () => {});
 process.on('SIGTERM', () => process.exit(0));
 process.on('SIGINT', () => process.exit(0));
 module.exports = app;
