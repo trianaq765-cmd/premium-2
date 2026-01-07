@@ -1,30 +1,16 @@
 const express = require('express');
 const axios = require('axios');
 const crypto = require('crypto');
-const config = require('./config');      // sama folder
-const db = require('./database');        // sama folder, bukan lib/redis
+const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const config = require('./config');
+const db = require('./lib/redis');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
 
-// ==================== CONSTANTS ====================
 const UNAUTHORIZED_HTML = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>403</title><style>*{margin:0;padding:0}body{background:#000;color:#fff;font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh}.c{text-align:center}.s{font-size:4rem;margin-bottom:1rem}h1{color:#ef4444}p{color:#666}</style></head><body><div class="c"><div class="s">🛡️</div><h1>403 Forbidden</h1><p>Access Denied</p></div></body></html>`;
 
-// ==================== MIDDLEWARE ====================
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.set('trust proxy', true);
-
-// CORS
-app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type,x-admin-key,x-hwid,x-player-id,x-executor-token,x-roblox-id,x-place-id,x-job-id');
-    if (req.method === 'OPTIONS') return res.sendStatus(200);
-    next();
-});
-
-// ==================== HELPER FUNCTIONS ====================
 function generateFakeScript() {
     const r = (l) => { let s = ''; const c = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_'; for (let i = 0; i < l; i++) s += c[Math.floor(Math.random() * c.length)]; return s; };
     const n = () => Math.floor(Math.random() * 99999);
@@ -32,39 +18,30 @@ function generateFakeScript() {
     const v = Array.from({length: 20}, () => r(Math.floor(Math.random() * 4) + 2));
     const f = Array.from({length: 80}, () => `"${h()}"`).join(',');
     const t = Array.from({length: 40}, () => `[${n()}]="${r(10)}"`).join(',');
-    return `local ${v[0]}=(function()local ${v[1]}={${f}};local ${v[2]}={${t}};local ${v[3]}=0;for ${v[4]}=1,#${v[1]} do ${v[3]}=${v[3]}+((string.byte(${v[1]}[${v[4]}]:sub(1,1))or 0)%256)end;return ${v[3]} end)();local ${v[5]}=coroutine.wrap(function()for ${v[6]}=1,${n()} do local ${v[7]}=bit32.bxor(${v[6]},${n()})coroutine.yield(${v[7]})end end);local ${v[8]}=setmetatable({${t}},{__index=function(t,k)return rawget(t,k)or"${r(16)}"end,__newindex=function()end});`;
+    return `local ${v[0]}=(function()local ${v[1]}={${f}};local ${v[2]}={${t}};local ${v[3]}=0;for ${v[4]}=1,#${v[1]} do ${v[3]}=${v[3]}+((string.byte(${v[1]}[${v[4]}]:sub(1,1))or 0)%256)end;return ${v[3]} end)();local ${v[5]}=coroutine.wrap(function()for ${v[6]}=1,${n()} do local ${v[7]}=bit32.bxor(${v[6]},${n()})coroutine.yield(${v[7]})end end);local ${v[8]}=setmetatable({${t}},{__index=function(t,k)return rawget(t,k)or"${r(16)}"end,__newindex=function()end});(function()local ${v[9]}={}for ${v[10]}=1,math.random(50,150)do ${v[9]}[${v[10]}]=string.rep("${r(4)}",math.random(5,20)):reverse()end end)();pcall(function()local ${v[11]}=0 while ${v[11]}<100 do local ${v[12]}=${v[5]}()if not ${v[12]} then break end;${v[11]}=${v[11]}+1 end end);`;
 }
 
-function getClientIP(req) {
-    return req.headers['x-forwarded-for']?.split(',')[0]?.trim() || 
-           req.headers['x-real-ip'] || 
-           req.headers['cf-connecting-ip'] ||
-           req.ip || 'unknown';
+function getIP(req) {
+    return req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.headers['x-real-ip'] || req.ip || 'unknown';
 }
 
 function getHWID(req) { return req.headers['x-hwid'] || null; }
 function getPlayerID(req) { return req.headers['x-player-id'] || null; }
 
 async function logAccess(req, action, success, details = {}) {
-    await db.addLog({ 
-        ip: getClientIP(req), 
-        hwid: getHWID(req), 
-        playerId: getPlayerID(req), 
-        ua: req.headers['user-agent']?.substring(0, 80) || 'unknown', 
-        action, success, path: req.path, 
-        ts: new Date().toISOString(), 
-        ...details 
-    });
+    const log = { ip: getIP(req), hwid: getHWID(req), playerId: getPlayerID(req), ua: req.headers['user-agent']?.substring(0, 80) || 'unknown', action, success, path: req.path, ts: new Date().toISOString(), ...details };
+    await db.addLog(log);
+    return log;
 }
 
 function isValidExecutor(req) {
     const ua = (req.headers['user-agent'] || '').toLowerCase();
     const validExecutors = ['roblox','synapse','krnl','fluxus','delta','electron','script-ware','scriptware','sentinel','oxygen','evon','arceus','hydrogen','vegax','trigon','comet','solara','wave','zorara','codex','celery','swift','sirhurt','wininet','executor','exploit','coco','temple','valyse','jjsploit','wearedevs','nihon'];
-    
-    return validExecutors.some(e => ua.includes(e)) || 
-           (req.headers['x-roblox-id'] && req.headers['x-place-id'] && req.headers['x-job-id']) ||
-           req.headers['x-executor-token'] || 
-           req.headers['x-hwid'];
+    const hasValidUA = validExecutors.some(e => ua.includes(e));
+    const hasRobloxHeaders = req.headers['x-roblox-id'] && req.headers['x-place-id'] && req.headers['x-job-id'];
+    const hasExecutorToken = req.headers['x-executor-token'];
+    const hasHWID = req.headers['x-hwid'];
+    return hasValidUA || hasRobloxHeaders || hasExecutorToken || hasHWID;
 }
 
 function isBrowser(req) {
@@ -80,15 +57,16 @@ function isBot(req) {
     if (isValidExecutor(req)) return false;
     const ua = (req.headers['user-agent'] || '').toLowerCase();
     const accept = req.headers['accept'] || '';
-    const botPatterns = ['bot','crawler','spider','scraper','curl','wget','python','node','axios','fetch','http','request','postman','insomnia','discord','telegram','java','okhttp','apache','libwww','perl','ruby','php','go-http','aiohttp','httpx'];
-    const hasRobloxUA = ['roblox','wininet','executor','exploit'].some(r => ua.includes(r));
-    
+    const botPatterns = ['bot','crawler','spider','scraper','curl','wget','python','node','axios','fetch','http','request','postman','insomnia','discord','telegram','slack','whatsapp','facebook','twitter','crypta','mee6','dyno','carl','dank','java','okhttp','apache','libwww','perl','ruby','php','go-http','aiohttp','httpx','got/','undici','needle','superagent','guzzle'];
     if (botPatterns.some(p => ua.includes(p))) return true;
     if (!ua || ua.length < 10) return true;
-    if (req.headers['sec-fetch-dest'] || req.headers['sec-fetch-mode']) return true;
-    if ((req.headers['referer'] || req.headers['origin']) && !hasRobloxUA) return true;
+    if (req.headers['sec-fetch-dest'] || req.headers['sec-fetch-mode'] || req.headers['sec-ch-ua']) return true;
+    if (req.headers['referer'] || req.headers['origin']) return true;
     if (req.headers['cookie']) return true;
-    if (accept.includes('text/html') && !hasRobloxUA) return true;
+    if (accept.includes('text/html') && !ua.includes('roblox')) return true;
+    const hasBrowserUA = ['mozilla','chrome','safari','firefox','edge'].some(b => ua.includes(b));
+    const hasRobloxUA = ['roblox','wininet','executor','exploit'].some(r => ua.includes(r));
+    if (hasBrowserUA && !hasRobloxUA) return true;
     return false;
 }
 
@@ -103,7 +81,7 @@ function generateSessionKey(userId, hwid, timestamp, secret) {
 
 function isObfuscated(script) {
     if (!script) return false;
-    return [/IronBrew/i, /Prometheus/i, /Moonsec/i, /Luraph/i, /PSU/i, /-- Obfuscated/i].some(r => r.test(script.substring(0, 500)));
+    return [/IronBrew/i,/Prometheus/i,/Moonsec/i,/Luraph/i,/PSU/i,/-- Obfuscated/i].some(r => r.test(script.substring(0, 500)));
 }
 
 async function getScript() {
@@ -111,17 +89,13 @@ async function getScript() {
     if (cached) return cached;
     if (!config.SCRIPT_SOURCE_URL) return null;
     try {
-        const res = await axios.get(config.SCRIPT_SOURCE_URL, { timeout: 8000, headers: { 'User-Agent': 'Roblox/WinInet' } });
+        const res = await axios.get(config.SCRIPT_SOURCE_URL, { timeout: 10000, headers: { 'User-Agent': 'Roblox/WinInet' } });
         if (typeof res.data === 'string' && res.data.length > 10) {
-            await db.setCachedScript(res.data, config.SCRIPT_CACHE_TTL || 300);
+            await db.setCachedScript(res.data);
             return res.data;
         }
-    } catch (err) { console.error('Script fetch error:', err.message); }
+    } catch {}
     return null;
-}
-
-function getServerUrl(req) {
-    return `${req.headers['x-forwarded-proto'] || 'https'}://${req.headers['host']}`;
 }
 
 function wrapScript(script, serverUrl) {
@@ -166,86 +140,86 @@ local function m() reg() n("🔄","Connecting...",2) local h={} if T then h["x-e
 pcall(m)`;
 }
 
-// ==================== ROUTES ====================
+app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false, crossOriginResourcePolicy: false }));
+app.use(cors({ origin: '*', methods: ['GET','POST','DELETE','OPTIONS'], allowedHeaders: ['Content-Type','x-admin-key','x-hwid','x-player-id','x-executor-token','x-roblox-id','x-place-id','x-job-id'] }));
+app.use(express.json({ limit: '2mb' }));
+app.set('trust proxy', 1);
+
+const limiter = rateLimit({ windowMs: 60000, max: 100, keyGenerator: (req) => getIP(req) });
+app.use(limiter);
 
 app.get('/', async (req, res) => {
     if (isBrowser(req)) return res.status(403).type('html').send(UNAUTHORIZED_HTML);
-    if (isBot(req)) { await logAccess(req, 'BOT_ROOT', false); return res.type('text/plain').send(generateFakeScript()); }
-    return res.json({ status: "online", version: "5.4.6" });
+    if (isBot(req)) { await logAccess(req, 'BOT_ROOT', false, { ua: req.headers['user-agent'] }); return res.type('text/plain').send(generateFakeScript()); }
+    res.json({ status: 'online', version: '5.4.6' });
 });
 
-app.get('/health', async (req, res) => {
-    const stats = await db.getStats();
-    res.json({ status: "ok", uptime: stats.uptime, bans: stats.totalBans, memory: stats.memoryUsage });
-});
+app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
-app.get(['/loader', '/api/loader.lua'], async (req, res) => {
+app.get(['/loader','/api/loader.lua'], async (req, res) => {
     if (isBrowser(req)) return res.status(403).type('html').send(UNAUTHORIZED_HTML);
-    if (isBot(req) || !isValidExecutor(req)) { await logAccess(req, 'BOT_LOADER', false); return res.type('text/plain').send(generateFakeScript()); }
+    if (isBot(req) || !isValidExecutor(req)) {
+        await logAccess(req, 'BOT_LOADER', false, { ua: req.headers['user-agent'] });
+        return res.type('text/plain').send(generateFakeScript());
+    }
     await logAccess(req, 'LOADER', true);
-    return res.type('text/plain').send(getLoader(getServerUrl(req)));
+    const serverUrl = process.env.RENDER_EXTERNAL_URL || `${req.protocol}://${req.get('host')}`;
+    res.type('text/plain').send(getLoader(serverUrl));
 });
 
 app.post('/api/executor/register', async (req, res) => {
-    const body = req.body || {};
-    if (!body.robloxId || !body.placeId || !body.jobId) return res.status(400).json({ success: false, error: "Missing fields" });
+    const { robloxId, placeId, jobId, hwid, executor } = req.body;
+    if (!robloxId || !placeId || !jobId) return res.status(400).json({ success: false, error: 'Missing fields' });
     const token = crypto.randomBytes(32).toString('hex');
-    await db.setToken(token, { ...body, ip: getClientIP(req), created: Date.now() }, 300);
-    await logAccess(req, 'REGISTER', true, { robloxId: body.robloxId });
-    return res.json({ success: true, token, expiresIn: 300 });
+    await db.setToken(token, { robloxId, placeId, jobId, hwid, executor, ip: getIP(req), created: Date.now() }, 300);
+    await logAccess(req, 'REGISTER', true, { robloxId });
+    res.json({ success: true, token, expiresIn: 300 });
 });
 
 app.post('/api/auth/challenge', async (req, res) => {
-    if (isBrowser(req)) return res.status(403).json({ success: false, error: "Forbidden" });
-    if (isBot(req) && !req.headers['x-executor-token']) { await logAccess(req, 'BOT_CHALLENGE', false); return res.status(403).json({ success: false, error: "Invalid client" }); }
-    
-    const body = req.body || {};
-    if (!body.userId || !body.hwid || !body.placeId) return res.status(400).json({ success: false, error: "Missing fields" });
-    
-    const uid = parseInt(body.userId), pid = parseInt(body.placeId);
-    if (isNaN(uid) || isNaN(pid)) return res.status(400).json({ success: false, error: "Invalid format" });
-    
-    const ban = await db.isBanned(body.hwid, getClientIP(req), uid);
-    if (ban.blocked) return res.status(403).json({ success: false, error: "Banned", reason: ban.reason, banId: ban.banId });
-    
-    if (config.ALLOWED_PLACE_IDS.length > 0 && !config.ALLOWED_PLACE_IDS.includes(pid)) return res.status(403).json({ success: false, error: "Game not allowed" });
-    
+    if (isBrowser(req)) return res.status(403).json({ success: false, error: 'Forbidden' });
+    if (isBot(req) && !req.headers['x-executor-token']) {
+        await logAccess(req, 'BOT_CHALLENGE', false, { ua: req.headers['user-agent'] });
+        return res.status(403).json({ success: false, error: 'Invalid client' });
+    }
+    const { userId, hwid, placeId } = req.body;
+    if (!userId || !hwid || !placeId) return res.status(400).json({ success: false, error: 'Missing fields' });
+    const uid = parseInt(userId), pid = parseInt(placeId);
+    if (isNaN(uid) || isNaN(pid)) return res.status(400).json({ success: false, error: 'Invalid format' });
+    const ban = await db.isBanned(hwid, getIP(req), uid);
+    if (ban.blocked) return res.status(403).json({ success: false, error: 'Banned', reason: ban.reason, banId: ban.banId });
+    if (config.ALLOWED_PLACE_IDS.length > 0 && !config.ALLOWED_PLACE_IDS.includes(pid)) return res.status(403).json({ success: false, error: 'Game not allowed' });
     const id = crypto.randomBytes(16).toString('hex');
-    const nums = Array.from({length: 5}, () => Math.floor(Math.random() * 50) + 1);
-    const challenge = { id, userId: uid, hwid: body.hwid, placeId: pid, ip: getClientIP(req), puzzle: { numbers: nums, operation: 'sum' }, answer: nums.reduce((a, b) => a + b, 0) };
-    
+    const nums = Array.from({length:5}, () => Math.floor(Math.random()*50)+1);
+    const challenge = { id, userId: uid, hwid, placeId: pid, ip: getIP(req), puzzle: { numbers: nums, operation: 'sum' }, answer: nums.reduce((a,b)=>a+b,0) };
     await db.setChallenge(id, challenge, 60);
     await logAccess(req, 'CHALLENGE', true, { id, userId: uid });
-    return res.json({ success: true, challengeId: id, puzzle: challenge.puzzle, expiresIn: 60 });
+    res.json({ success: true, challengeId: id, puzzle: challenge.puzzle, expiresIn: 60 });
 });
 
 app.post('/api/auth/verify', async (req, res) => {
-    if (isBrowser(req)) return res.status(403).json({ success: false, error: "Forbidden" });
-    if (isBot(req) && !req.headers['x-executor-token']) { await logAccess(req, 'BOT_VERIFY', false); return res.status(403).json({ success: false, error: "Invalid client" }); }
-    
-    const body = req.body || {};
-    if (!body.challengeId || body.solution === undefined || !body.timestamp) return res.status(400).json({ success: false, error: "Missing fields" });
-    
-    const challenge = await db.getChallenge(body.challengeId);
-    if (!challenge) return res.status(403).json({ success: false, error: "Expired" });
-    if (challenge.ip !== getClientIP(req)) return res.status(403).json({ success: false, error: "IP mismatch" });
-    if (parseInt(body.solution) !== challenge.answer) return res.status(403).json({ success: false, error: "Wrong" });
-    
-    await db.deleteChallenge(body.challengeId);
-    
+    if (isBrowser(req)) return res.status(403).json({ success: false, error: 'Forbidden' });
+    if (isBot(req) && !req.headers['x-executor-token']) {
+        await logAccess(req, 'BOT_VERIFY', false, { ua: req.headers['user-agent'] });
+        return res.status(403).json({ success: false, error: 'Invalid client' });
+    }
+    const { challengeId, solution, timestamp } = req.body;
+    if (!challengeId || solution === undefined || !timestamp) return res.status(400).json({ success: false, error: 'Missing fields' });
+    const challenge = await db.getChallenge(challengeId);
+    if (!challenge) return res.status(403).json({ success: false, error: 'Expired' });
+    if (challenge.ip !== getIP(req)) return res.status(403).json({ success: false, error: 'IP mismatch' });
+    if (parseInt(solution) !== challenge.answer) return res.status(403).json({ success: false, error: 'Wrong' });
+    await db.deleteChallenge(challengeId);
     const script = await getScript();
-    if (!script) return res.status(500).json({ success: false, error: "Script not configured" });
-    
-    const serverUrl = getServerUrl(req);
+    if (!script) return res.status(500).json({ success: false, error: 'Not configured' });
+    const serverUrl = process.env.RENDER_EXTERNAL_URL || `${req.protocol}://${req.get('host')}`;
     const wrapped = wrapScript(script, serverUrl);
     const isObf = config.SCRIPT_ALREADY_OBFUSCATED || isObfuscated(script);
-    
     if (isObf) {
         await logAccess(req, 'SCRIPT_RAW', true, { userId: challenge.userId });
         return res.json({ success: true, mode: 'raw', script: wrapped, ownerIds: config.OWNER_USER_IDS, whitelistIds: config.WHITELIST_USER_IDS, banEndpoint: `${serverUrl}/api/ban`, meta: { userId: challenge.userId, placeId: challenge.placeId, timestamp: Date.now() } });
     }
-    
-    const key = generateSessionKey(challenge.userId, challenge.hwid, body.timestamp, config.SECRET_KEY);
+    const key = generateSessionKey(challenge.userId, challenge.hwid, timestamp, config.SECRET_KEY);
     const chunks = [];
     for (let i = 0; i < wrapped.length; i += 2000) {
         const chunk = wrapped.substring(i, i + 2000);
@@ -253,91 +227,87 @@ app.post('/api/auth/verify', async (req, res) => {
         for (let j = 0; j < chunk.length; j++) enc.push(chunk.charCodeAt(j) ^ key.charCodeAt(j % key.length));
         chunks.push(enc);
     }
-    
     await logAccess(req, 'SCRIPT_ENC', true, { userId: challenge.userId });
-    return res.json({ success: true, mode: 'encrypted', key, chunks, checksum: crypto.createHash('md5').update(wrapped).digest('hex'), ownerIds: config.OWNER_USER_IDS, whitelistIds: config.WHITELIST_USER_IDS, banEndpoint: `${serverUrl}/api/ban`, meta: { userId: challenge.userId, placeId: challenge.placeId, timestamp: Date.now() } });
+    res.json({ success: true, mode: 'encrypted', key, chunks, checksum: crypto.createHash('md5').update(wrapped).digest('hex'), ownerIds: config.OWNER_USER_IDS, whitelistIds: config.WHITELIST_USER_IDS, banEndpoint: `${serverUrl}/api/ban`, meta: { userId: challenge.userId, placeId: challenge.placeId, timestamp: Date.now() } });
 });
 
 app.post('/api/ban', async (req, res) => {
-    const body = req.body || {};
-    if (!body.hwid && !body.playerId) return res.status(400).json({ error: "Missing id" });
-    
+    const { hwid, playerId, playerName, reason, toolsDetected } = req.body;
+    if (!hwid && !playerId) return res.status(400).json({ error: 'Missing id' });
     const banId = crypto.randomBytes(8).toString('hex').toUpperCase();
-    const data = { hwid: body.hwid, ip: getClientIP(req), playerId: body.playerId, playerName: body.playerName, reason: body.reason || 'Auto-ban', toolsDetected: body.toolsDetected || [], banId, ts: new Date().toISOString() };
-    
-    if (body.hwid) await db.addBan(body.hwid, data);
-    if (body.playerId) await db.addBan(String(body.playerId), data);
-    
-    await logAccess(req, 'BAN', true, { playerId: body.playerId, reason: body.reason, banId });
-    return res.json({ success: true, banId });
+    const data = { hwid, ip: getIP(req), playerId, playerName, reason: reason || 'Auto', toolsDetected: toolsDetected || [], banId, ts: new Date().toISOString() };
+    if (hwid) await db.addBan(hwid, data);
+    if (playerId) await db.addBan(String(playerId), data);
+    await logAccess(req, 'BAN', true, { playerId, reason, banId });
+    res.json({ success: true, banId });
 });
-
-// ==================== ADMIN ROUTES ====================
 
 app.get('/api/admin/stats', async (req, res) => {
     const key = req.headers['x-admin-key'] || req.query.key;
-    if (!key || !secureCompare(key, config.ADMIN_KEY)) return res.status(403).json({ error: "Invalid key" });
+    if (!key || !secureCompare(key, config.ADMIN_KEY)) return res.status(403).json({ error: 'Invalid key' });
     const stats = await db.getStats();
-    return res.json({ success: true, stats, config: { owners: config.OWNER_USER_IDS.length, whitelist: config.WHITELIST_USER_IDS.length } });
+    res.json({ success: true, stats, config: { owners: config.OWNER_USER_IDS.length, whitelist: config.WHITELIST_USER_IDS.length }, platform: 'render' });
 });
 
 app.get('/api/admin/logs', async (req, res) => {
     const key = req.headers['x-admin-key'] || req.query.key;
-    if (!key || !secureCompare(key, config.ADMIN_KEY)) return res.status(403).json({ error: "Invalid key" });
+    if (!key || !secureCompare(key, config.ADMIN_KEY)) return res.status(403).json({ error: 'Invalid key' });
     const limit = Math.min(parseInt(req.query.limit) || 50, 500);
     const logs = await db.getLogs(limit);
-    return res.json({ success: true, logs });
+    res.json({ success: true, count: logs.length, logs });
 });
 
 app.get('/api/admin/bans', async (req, res) => {
     const key = req.headers['x-admin-key'] || req.query.key;
-    if (!key || !secureCompare(key, config.ADMIN_KEY)) return res.status(403).json({ error: "Invalid key" });
+    if (!key || !secureCompare(key, config.ADMIN_KEY)) return res.status(403).json({ error: 'Invalid key' });
     const bans = await db.getAllBans();
-    return res.json({ success: true, count: bans.length, bans });
+    res.json({ success: true, count: bans.length, bans });
 });
 
 app.delete('/api/admin/bans/:banId', async (req, res) => {
     const key = req.headers['x-admin-key'];
-    if (!key || !secureCompare(key, config.ADMIN_KEY)) return res.status(403).json({ error: "Invalid key" });
+    if (!key || !secureCompare(key, config.ADMIN_KEY)) return res.status(403).json({ error: 'Invalid key' });
     const bans = await db.getAllBans();
     const found = bans.find(b => b.banId === req.params.banId);
     if (found) { await db.removeBan(found.key); return res.json({ success: true }); }
-    return res.status(404).json({ success: false, error: "Not found" });
+    res.status(404).json({ success: false, error: 'Not found' });
+});
+
+app.post('/api/admin/bans', async (req, res) => {
+    const key = req.headers['x-admin-key'];
+    if (!key || !secureCompare(key, config.ADMIN_KEY)) return res.status(403).json({ error: 'Invalid key' });
+    const { hwid, ip, playerId, playerName, reason } = req.body;
+    if (!hwid && !ip && !playerId) return res.status(400).json({ error: 'Identifier required' });
+    const banId = crypto.randomBytes(8).toString('hex').toUpperCase();
+    const data = { hwid, ip, playerId, playerName, reason: reason || 'Manual ban', banId, ts: new Date().toISOString(), bannedBy: 'admin' };
+    if (hwid) await db.addBan(hwid, data);
+    if (playerId) await db.addBan(String(playerId), data);
+    if (ip) await db.addBan(ip, data);
+    res.json({ success: true, banId });
 });
 
 app.post('/api/admin/bans/clear', async (req, res) => {
     const key = req.headers['x-admin-key'];
-    if (!key || !secureCompare(key, config.ADMIN_KEY)) return res.status(403).json({ error: "Invalid key" });
+    if (!key || !secureCompare(key, config.ADMIN_KEY)) return res.status(403).json({ error: 'Invalid key' });
     const count = await db.clearBans();
-    return res.json({ success: true, cleared: count });
+    res.json({ success: true, cleared: count });
 });
 
 app.post('/api/admin/cache/clear', async (req, res) => {
     const key = req.headers['x-admin-key'];
-    if (!key || !secureCompare(key, config.ADMIN_KEY)) return res.status(403).json({ error: "Invalid key" });
+    if (!key || !secureCompare(key, config.ADMIN_KEY)) return res.status(403).json({ error: 'Invalid key' });
     await db.setCachedScript(null);
-    return res.json({ success: true, message: "Cache cleared" });
+    res.json({ success: true });
 });
 
-// ==================== 404 & ERROR ====================
-
-app.use(async (req, res) => {
+app.use('*', async (req, res) => {
     if (isBrowser(req)) return res.status(404).type('html').send(UNAUTHORIZED_HTML);
-    if (isBot(req) || !isValidExecutor(req)) { await logAccess(req, 'BOT_404', false); return res.type('text/plain').send(generateFakeScript()); }
-    return res.status(404).json({ error: "Not found" });
+    if (isBot(req) || !isValidExecutor(req)) {
+        await logAccess(req, 'BOT_404', false, { ua: req.headers['user-agent'] });
+        return res.type('text/plain').send(generateFakeScript());
+    }
+    res.status(404).json({ error: 'Not found' });
 });
 
-app.use((err, req, res, next) => {
-    console.error('Error:', err.message);
-    return res.status(500).json({ error: "Server error" });
-});
-
-// ==================== START ====================
-
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Server running on port ${PORT}`);
-    console.log(`📦 Database: In-Memory`);
-    console.log(`🔗 Owners: ${config.OWNER_USER_IDS.length} | Whitelist: ${config.WHITELIST_USER_IDS.length}`);
-});
-
-module.exports = app;
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, '0.0.0.0', () => {});
