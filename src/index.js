@@ -126,6 +126,7 @@ const UNAUTHORIZED_HTML = `<!DOCTYPE html>
     </div>
 </body>
 </html>`;
+
 app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false, crossOriginResourcePolicy: false }));
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'DELETE', 'PUT', 'PATCH'], allowedHeaders: ['Content-Type', 'x-admin-key', 'Authorization', 'x-hwid', 'x-player-id'] }));
 app.use(express.json({ limit: '2mb' }));
