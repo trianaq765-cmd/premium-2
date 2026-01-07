@@ -126,7 +126,6 @@ const UNAUTHORIZED_HTML = `<!DOCTYPE html>
     </div>
 </body>
 </html>`;
-
 app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false, crossOriginResourcePolicy: false }));
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'DELETE', 'PUT', 'PATCH'], allowedHeaders: ['Content-Type', 'x-admin-key', 'Authorization', 'x-hwid', 'x-player-id'] }));
 app.use(express.json({ limit: '2mb' }));
@@ -207,7 +206,10 @@ app.post('/api/auth/verify', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, error: "Server error" }); }
 });
 
-app.get('/loader', (req, res) => {
+// ============================================================
+// 📜 LOADER ENDPOINT - /api/loader.lua
+// ============================================================
+const loaderHandler = (req, res) => {
     if (isBrowser(req)) return res.status(403).type('text/html').send(UNAUTHORIZED_HTML);
     const serverUrl = process.env.RENDER_EXTERNAL_URL || process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
     const loaderScript = `local SERVER="${serverUrl}" local HttpService=game:GetService("HttpService") local Players=game:GetService("Players") local StarterGui=game:GetService("StarterGui") local CoreGui=game:GetService("CoreGui") local LocalPlayer=Players.LocalPlayer local _ACTIVE=true
@@ -220,7 +222,11 @@ local function main() notify("🔄 Loading","Connecting...",2) local cData,e1=ht
 pcall(main)`;
     logAccess(req, 'LOADER_SERVED', true, { size: loaderScript.length });
     res.type('text/plain').send(loaderScript);
-});
+};
+
+// Daftarkan di kedua path
+app.get('/api/loader.lua', loaderHandler);
+app.get('/loader', loaderHandler);  // Backward compatible
 
 app.get('/script', async (req, res) => {
     if (isBrowser(req)) return res.status(403).type('text/html').send(UNAUTHORIZED_HTML);
@@ -257,14 +263,12 @@ local function _checkToolsExecuted()
     for _,m in ipairs(_DEX_MARKERS) do local v=rawget(env,m) if v~=nil and type(v)=="table" then return true,"DEX",m end end
     for _,m in ipairs(_SPY_MARKERS) do if rawget(env,m)==true or (rawget(env,m)~=nil and type(rawget(env,m))=="table") then return true,"SPY",m end end
     for _,loc in ipairs({_CORE,_PGUI}) do
-        local success=pcall(function()
+        pcall(function()
             for _,gui in pairs(loc:GetChildren()) do
                 if gui:IsA("ScreenGui") then
                     local name=gui.Name:lower()
                     for _,pattern in ipairs(_TOOL_GUI_PATTERNS) do
-                        if name:find(pattern,1,true) then
-                            return true,"GUI",gui.Name
-                        end
+                        if name:find(pattern,1,true) then return true,"GUI",gui.Name end
                     end
                 end
             end
@@ -355,7 +359,7 @@ app.post('/api/admin/refresh', adminAuth, async (req, res) => { try { scriptCach
 app.get('/api/admin/whitelist', adminAuth, (req, res) => { res.json({ success: true, whitelist: config.WHITELIST_USER_IDS, count: config.WHITELIST_USER_IDS.length }); });
 app.get('/api/admin/user/:userId', adminAuth, async (req, res) => { try { const userId = parseInt(req.params.userId); const userInfo = await verifyRobloxUser(userId); res.json({ success: true, user: { ...userInfo, isWhitelisted: config.WHITELIST_USER_IDS.includes(userId), isOwner: config.OWNER_USER_IDS.includes(userId) } }); } catch (error) { res.status(500).json({ success: false, error: error.message }); } });
 
-app.use('*', (req, res) => { if (isBrowser(req)) return res.status(404).type('text/html').send(UNAUTHORIZED_HTML); res.status(404).json({ error: "Not found", endpoints: ["GET /", "GET /loader", "GET /script", "POST /api/auth/challenge", "POST /api/auth/verify", "POST /api/ban"] }); });
+app.use('*', (req, res) => { if (isBrowser(req)) return res.status(404).type('text/html').send(UNAUTHORIZED_HTML); res.status(404).json({ error: "Not found", endpoints: ["GET /", "GET /api/loader.lua", "GET /script", "POST /api/auth/challenge", "POST /api/auth/verify", "POST /api/ban"] }); });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => { console.log(`🛡️ Premium Loader v5.4.1 | Port: ${PORT} | ${new Date().toISOString()}`); console.log(`📍 Whitelist: ${config.WHITELIST_USER_IDS.length} | Owners: ${config.OWNER_USER_IDS.length} | Games: ${config.ALLOWED_PLACE_IDS.length || 'ALL'}`); console.log(`🔧 Script URL: ${config.SCRIPT_SOURCE_URL ? 'Configured' : 'NOT SET'} | Obfuscated: ${config.SCRIPT_ALREADY_OBFUSCATED}`); });
