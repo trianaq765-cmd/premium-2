@@ -2,7 +2,7 @@ const express = require('express');
 const axios = require('axios');
 const crypto = require('crypto');
 const config = require('./config');
-const db = require('./lib/redis');
+const db = require('./lib/database');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -13,6 +13,9 @@ const UNAUTHORIZED_HTML = `<!DOCTYPE html><html><head><meta charset="UTF-8"><tit
 // ==================== MIDDLEWARE ====================
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Trust proxy untuk mendapatkan IP yang benar di Render
+app.set('trust proxy', true);
 
 // CORS Middleware
 app.use((req, res, next) => {
@@ -39,9 +42,9 @@ function generateFakeScript() {
 function getClientIP(req) {
     return req.headers['x-forwarded-for']?.split(',')[0]?.trim() || 
            req.headers['x-real-ip'] || 
-           req.headers['client-ip'] || 
+           req.headers['cf-connecting-ip'] ||
+           req.ip ||
            req.connection?.remoteAddress || 
-           req.socket?.remoteAddress ||
            'unknown';
 }
 
@@ -108,10 +111,8 @@ function isBot(req) {
         'bot', 'crawler', 'spider', 'scraper', 'curl', 'wget', 'python',
         'node', 'axios', 'fetch', 'http', 'request', 'postman', 'insomnia',
         'discord', 'telegram', 'slack', 'whatsapp', 'facebook', 'twitter',
-        'crypta', 'mee6', 'dyno', 'carl', 'dank', 'groovy', 'rythm',
         'java', 'okhttp', 'apache', 'libwww', 'perl', 'ruby', 'php',
-        'go-http', 'aiohttp', 'httpx', 'got/', 'undici', 'needle',
-        'superagent', 'restsharp', 'guzzle', 'unirest'
+        'go-http', 'aiohttp', 'httpx', 'got/', 'undici'
     ];
     
     const hasBotUA = botPatterns.some(p => ua.includes(p));
@@ -119,20 +120,14 @@ function isBot(req) {
     const hasBrowserUA = ['mozilla', 'chrome', 'safari', 'firefox', 'edge'].some(b => ua.includes(b));
     const hasRobloxUA = ['roblox', 'wininet', 'executor', 'exploit'].some(r => ua.includes(r));
     
-    const hasSuspiciousHeaders = req.headers['accept-language'] && accept.includes('text/html') && !hasRobloxUA;
     const hasSecurityHeaders = req.headers['sec-fetch-dest'] || req.headers['sec-fetch-mode'] || req.headers['sec-ch-ua'];
     const hasReferer = req.headers['referer'] || req.headers['origin'];
     const hasCookie = req.headers['cookie'];
     const acceptsHTML = accept.includes('text/html') && !hasRobloxUA;
-    const isSuspiciousBrowser = hasBrowserUA && !hasRobloxUA && (hasSuspiciousHeaders || hasSecurityHeaders);
     
-    if (hasBotUA) return true;
-    if (hasEmptyUA) return true;
-    if (isSuspiciousBrowser) return true;
-    if (hasSecurityHeaders) return true;
-    if (hasReferer && !hasRobloxUA) return true;
-    if (hasCookie) return true;
-    if (acceptsHTML) return true;
+    if (hasBotUA || hasEmptyUA) return true;
+    if (hasSecurityHeaders || hasReferer && !hasRobloxUA) return true;
+    if (hasCookie || acceptsHTML) return true;
     if (!hasRobloxUA && hasBrowserUA) return true;
     
     return false;
@@ -157,18 +152,23 @@ async function getScript() {
     if (cached) return cached;
     if (!config.SCRIPT_SOURCE_URL) return null;
     try {
-        const res = await axios.get(config.SCRIPT_SOURCE_URL, { timeout: 8000, headers: { 'User-Agent': 'Roblox/WinInet' } });
+        const res = await axios.get(config.SCRIPT_SOURCE_URL, { 
+            timeout: 8000, 
+            headers: { 'User-Agent': 'Roblox/WinInet' } 
+        });
         if (typeof res.data === 'string' && res.data.length > 10) {
-            await db.setCachedScript(res.data);
+            await db.setCachedScript(res.data, config.SCRIPT_CACHE_TTL);
             return res.data;
         }
-    } catch {}
+    } catch (err) {
+        console.error('Failed to fetch script:', err.message);
+    }
     return null;
 }
 
 function getServerUrl(req) {
-    const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
-    const host = req.headers['host'] || req.headers['x-forwarded-host'];
+    const protocol = req.headers['x-forwarded-proto'] || 'https';
+    const host = req.headers['host'];
     return `${protocol}://${host}`;
 }
 
@@ -238,26 +238,27 @@ pcall(m)`;
 app.get('/', async (req, res) => {
     if (isBrowser(req)) return res.status(403).type('html').send(UNAUTHORIZED_HTML);
     if (isBot(req)) {
-        await logAccess(req, 'BOT_ROOT', false, { ua: req.headers['user-agent'] });
+        await logAccess(req, 'BOT_ROOT', false);
         return res.type('text/plain').send(generateFakeScript());
     }
     return res.json({ status: "online", version: "5.4.6" });
 });
 
 // Health check
-app.get('/health', (req, res) => {
-    res.json({ status: "ok", uptime: process.uptime() });
+app.get('/health', async (req, res) => {
+    const stats = await db.getStats();
+    res.json({ status: "ok", uptime: stats.uptime, bans: stats.totalBans });
 });
 
 // Loader endpoints
 app.get(['/loader', '/api/loader.lua'], async (req, res) => {
     if (isBrowser(req)) return res.status(403).type('html').send(UNAUTHORIZED_HTML);
     if (isBot(req)) {
-        await logAccess(req, 'BOT_LOADER', false, { ua: req.headers['user-agent'] });
+        await logAccess(req, 'BOT_LOADER', false);
         return res.type('text/plain').send(generateFakeScript());
     }
     if (!isValidExecutor(req)) {
-        await logAccess(req, 'INVALID_EXECUTOR', false, { ua: req.headers['user-agent'] });
+        await logAccess(req, 'INVALID_EXECUTOR', false);
         return res.type('text/plain').send(generateFakeScript());
     }
     await logAccess(req, 'LOADER', true);
@@ -280,7 +281,7 @@ app.post('/api/executor/register', async (req, res) => {
 app.post('/api/auth/challenge', async (req, res) => {
     if (isBrowser(req)) return res.status(403).json({ success: false, error: "Forbidden" });
     if (isBot(req) && !req.headers['x-executor-token']) {
-        await logAccess(req, 'BOT_CHALLENGE', false, { ua: req.headers['user-agent'] });
+        await logAccess(req, 'BOT_CHALLENGE', false);
         return res.status(403).json({ success: false, error: "Invalid client" });
     }
     
@@ -306,10 +307,7 @@ app.post('/api/auth/challenge', async (req, res) => {
     const id = crypto.randomBytes(16).toString('hex');
     const nums = Array.from({length: 5}, () => Math.floor(Math.random() * 50) + 1);
     const challenge = { 
-        id, 
-        userId: uid, 
-        hwid: body.hwid, 
-        placeId: pid, 
+        id, userId: uid, hwid: body.hwid, placeId: pid, 
         ip: getClientIP(req), 
         puzzle: { numbers: nums, operation: 'sum' }, 
         answer: nums.reduce((a, b) => a + b, 0) 
@@ -325,7 +323,7 @@ app.post('/api/auth/challenge', async (req, res) => {
 app.post('/api/auth/verify', async (req, res) => {
     if (isBrowser(req)) return res.status(403).json({ success: false, error: "Forbidden" });
     if (isBot(req) && !req.headers['x-executor-token']) {
-        await logAccess(req, 'BOT_VERIFY', false, { ua: req.headers['user-agent'] });
+        await logAccess(req, 'BOT_VERIFY', false);
         return res.status(403).json({ success: false, error: "Invalid client" });
     }
     
@@ -342,7 +340,7 @@ app.post('/api/auth/verify', async (req, res) => {
     await db.deleteChallenge(body.challengeId);
     
     const script = await getScript();
-    if (!script) return res.status(500).json({ success: false, error: "Not configured" });
+    if (!script) return res.status(500).json({ success: false, error: "Script not configured" });
     
     const serverUrl = getServerUrl(req);
     const wrapped = wrapScript(script, serverUrl);
@@ -351,12 +349,10 @@ app.post('/api/auth/verify', async (req, res) => {
     if (isObf) {
         await logAccess(req, 'SCRIPT_RAW', true, { userId: challenge.userId });
         return res.json({ 
-            success: true, 
-            mode: 'raw', 
-            script: wrapped, 
+            success: true, mode: 'raw', script: wrapped, 
             ownerIds: config.OWNER_USER_IDS, 
             whitelistIds: config.WHITELIST_USER_IDS, 
-            banEndpoint: `${serverUrl}/api/ban`, 
+            banEndpoint: `${serverUrl}/api/ban`,
             meta: { userId: challenge.userId, placeId: challenge.placeId, timestamp: Date.now() } 
         });
     }
@@ -372,14 +368,11 @@ app.post('/api/auth/verify', async (req, res) => {
     
     await logAccess(req, 'SCRIPT_ENC', true, { userId: challenge.userId });
     return res.json({ 
-        success: true, 
-        mode: 'encrypted', 
-        key, 
-        chunks, 
+        success: true, mode: 'encrypted', key, chunks, 
         checksum: crypto.createHash('md5').update(wrapped).digest('hex'), 
         ownerIds: config.OWNER_USER_IDS, 
         whitelistIds: config.WHITELIST_USER_IDS, 
-        banEndpoint: `${serverUrl}/api/ban`, 
+        banEndpoint: `${serverUrl}/api/ban`,
         meta: { userId: challenge.userId, placeId: challenge.placeId, timestamp: Date.now() } 
     });
 });
@@ -393,14 +386,11 @@ app.post('/api/ban', async (req, res) => {
     
     const banId = crypto.randomBytes(8).toString('hex').toUpperCase();
     const data = { 
-        hwid: body.hwid, 
-        ip: getClientIP(req), 
-        playerId: body.playerId, 
-        playerName: body.playerName, 
-        reason: body.reason || 'Auto', 
+        hwid: body.hwid, ip: getClientIP(req), 
+        playerId: body.playerId, playerName: body.playerName, 
+        reason: body.reason || 'Auto-ban', 
         toolsDetected: body.toolsDetected || [], 
-        banId, 
-        ts: new Date().toISOString() 
+        banId, ts: new Date().toISOString() 
     };
     
     if (body.hwid) await db.addBan(body.hwid, data);
@@ -412,7 +402,6 @@ app.post('/api/ban', async (req, res) => {
 
 // ==================== ADMIN ROUTES ====================
 
-// Admin stats
 app.get('/api/admin/stats', async (req, res) => {
     const key = req.headers['x-admin-key'] || req.query.key;
     if (!key || !secureCompare(key, config.ADMIN_KEY)) {
@@ -420,13 +409,11 @@ app.get('/api/admin/stats', async (req, res) => {
     }
     const stats = await db.getStats();
     return res.json({ 
-        success: true, 
-        stats, 
+        success: true, stats, 
         config: { owners: config.OWNER_USER_IDS.length, whitelist: config.WHITELIST_USER_IDS.length } 
     });
 });
 
-// Admin logs
 app.get('/api/admin/logs', async (req, res) => {
     const key = req.headers['x-admin-key'] || req.query.key;
     if (!key || !secureCompare(key, config.ADMIN_KEY)) {
@@ -437,7 +424,6 @@ app.get('/api/admin/logs', async (req, res) => {
     return res.json({ success: true, logs });
 });
 
-// Admin bans list
 app.get('/api/admin/bans', async (req, res) => {
     const key = req.headers['x-admin-key'] || req.query.key;
     if (!key || !secureCompare(key, config.ADMIN_KEY)) {
@@ -447,7 +433,6 @@ app.get('/api/admin/bans', async (req, res) => {
     return res.json({ success: true, count: bans.length, bans });
 });
 
-// Delete specific ban
 app.delete('/api/admin/bans/:banId', async (req, res) => {
     const key = req.headers['x-admin-key'];
     if (!key || !secureCompare(key, config.ADMIN_KEY)) {
@@ -462,7 +447,6 @@ app.delete('/api/admin/bans/:banId', async (req, res) => {
     return res.status(404).json({ success: false, error: "Not found" });
 });
 
-// Clear all bans
 app.post('/api/admin/bans/clear', async (req, res) => {
     const key = req.headers['x-admin-key'];
     if (!key || !secureCompare(key, config.ADMIN_KEY)) {
@@ -472,36 +456,37 @@ app.post('/api/admin/bans/clear', async (req, res) => {
     return res.json({ success: true, cleared: count });
 });
 
-// Clear cache
 app.post('/api/admin/cache/clear', async (req, res) => {
     const key = req.headers['x-admin-key'];
     if (!key || !secureCompare(key, config.ADMIN_KEY)) {
         return res.status(403).json({ error: "Invalid key" });
     }
     await db.setCachedScript(null);
-    return res.json({ success: true });
+    return res.json({ success: true, message: "Cache cleared" });
 });
 
-// ==================== 404 HANDLER ====================
+// ==================== 404 & ERROR HANDLERS ====================
+
 app.use(async (req, res) => {
     if (isBrowser(req)) return res.status(404).type('html').send(UNAUTHORIZED_HTML);
     if (isBot(req) || !isValidExecutor(req)) {
-        await logAccess(req, 'BOT_404', false, { ua: req.headers['user-agent'] });
+        await logAccess(req, 'BOT_404', false);
         return res.type('text/plain').send(generateFakeScript());
     }
     return res.status(404).json({ error: "Not found" });
 });
 
-// ==================== ERROR HANDLER ====================
 app.use((err, req, res, next) => {
     console.error('Server Error:', err);
     return res.status(500).json({ error: "Server error" });
 });
 
 // ==================== START SERVER ====================
+
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Server running on port ${PORT}`);
     console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`⚠️  Using In-Memory Database`);
 });
 
 module.exports = app;
