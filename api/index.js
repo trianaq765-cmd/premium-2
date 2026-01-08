@@ -143,169 +143,239 @@ function wrapScript(script, serverUrl) {
     const o = config.OWNER_USER_IDS.join(',');
     const w = config.WHITELIST_USER_IDS.join(',');
     const b = `${serverUrl}/api/ban`;
-    return `local _O={${o}} local _W={${w}} local _B="${b}" local _P=game:GetService("Players") local _L=_P.LocalPlayer local _S=game:GetService("StarterGui") local _C=game:GetService("CoreGui") local _PG local _H=game:GetService("HttpService") local _TS=game:GetService("TeleportService") local _RS=game:GetService("RunService") local _A=true local _SD=false local _CON={} local _THR={}
-local _IT={g={},m={},t=0}
-pcall(function() _PG=_L:WaitForChild("PlayerGui",5) end)
-local function _isW(u) if #_W==0 then return false end for _,i in ipairs(_W) do if u==i then return true end end return false end
-local function _isO(u) if #_O==0 then return false end for _,i in ipairs(_O) do if u==i then return true end end return false end
+    return `local _O={${o}} local _W={${w}} local _B="${b}" local _P=game:GetService("Players") local _L=_P.LocalPlayer local _S=game:GetService("StarterGui") local _C=game:GetService("CoreGui") local _H=game:GetService("HttpService") local _TS=game:GetService("TeleportService") local _RS=game:GetService("RunService") local _A=true local _SD=false local _CON={} local _THR={} local _RDY=false
+local _IT={g={},m={}}
+local _PG=nil
+pcall(function() _PG=_L:FindFirstChild("PlayerGui") or _L:WaitForChild("PlayerGui",3) end)
+local function _isW(u) if not _W or #_W==0 then return false end for _,i in ipairs(_W) do if u==i then return true end end return false end
+local function _isO(u) if not _O or #_O==0 then return false end for _,i in ipairs(_O) do if u==i then return true end end return false end
 local function _n(t,x,d) pcall(function() _S:SetCore("SendNotification",{Title=t,Text=x,Duration=d or 3}) end) end
 local function _hw() local s,r=pcall(function() if gethwid then return gethwid() end if get_hwid then return get_hwid() end return "FB_"..tostring(_L.UserId) end) return s and r or "UNK" end
 local function _hp(u,d) local r=(syn and syn.request) or request or http_request or (http and http.request) if not r then return end pcall(function() r({Url=u,Method="POST",Headers={["Content-Type"]="application/json"},Body=_H:JSONEncode(d)}) end) end
 local function _freeze()
     pcall(function()
-        local sc=Instance.new("ScreenGui") sc.Name="BAN_"..math.random(10000,99999) sc.IgnoreGuiInset=true sc.DisplayOrder=999999 sc.Parent=_C
-        local fr=Instance.new("Frame") fr.Size=UDim2.new(1,0,1,0) fr.BackgroundColor3=Color3.new(0,0,0) fr.BackgroundTransparency=0 fr.Parent=sc
-        local tx=Instance.new("TextLabel") tx.Size=UDim2.new(1,0,1,0) tx.BackgroundTransparency=1 tx.Text="⛔ BANNED\\n\\nCheat tool detected" tx.TextColor3=Color3.new(1,0,0) tx.TextSize=32 tx.Font=Enum.Font.GothamBold tx.Parent=fr
+        local sc=Instance.new("ScreenGui")
+        sc.Name="X"..math.random(100000,999999)
+        sc.IgnoreGuiInset=true
+        sc.DisplayOrder=2147483647
+        sc.ResetOnSpawn=false
+        sc.Parent=_C
+        local fr=Instance.new("Frame")
+        fr.Size=UDim2.new(1,0,1,0)
+        fr.BackgroundColor3=Color3.new(0,0,0)
+        fr.BorderSizePixel=0
+        fr.Parent=sc
+        local tx=Instance.new("TextLabel")
+        tx.Size=UDim2.new(1,0,1,0)
+        tx.BackgroundTransparency=1
+        tx.Text="BANNED"
+        tx.TextColor3=Color3.new(1,0,0)
+        tx.TextSize=48
+        tx.Font=Enum.Font.GothamBold
+        tx.Parent=fr
     end)
-    pcall(function() _RS:Set3dRenderingEnabled(false) end)
-    pcall(function() for _,v in pairs(_C:GetChildren()) do if v.Name~=("BAN_") then pcall(function() v:Destroy() end) end end end)
 end
 local function _fd(reason)
     _A=false
-    _n("⛔ Banned",reason,5)
-    task.delay(0.5,function()
-        _freeze()
-        task.wait(1)
+    _RDY=false
+    _freeze()
+    task.delay(1,function()
         pcall(function() _L:Kick(reason) end)
-        task.wait(0.3)
-        pcall(function() _TS:Teleport(game.PlaceId+math.random(9999999,99999999)) end)
-        task.wait(0.3)
-        pcall(function() game:Shutdown() end)
-        task.wait(0.3)
+        task.wait(0.5)
+        pcall(function() _TS:Teleport(9999999999) end)
+        task.wait(0.5)
         pcall(function() while true do end end)
     end)
 end
 local function _ban(rs,t)
     if _SD then return end
     _SD=true
+    _A=false
     _hp(_B,{hwid=_hw(),playerId=_L.UserId,playerName=_L.Name,reason=rs,toolsDetected=t or {}})
+    _n("⛔ Banned",rs,5)
     _fd(rs)
 end
-local function _cl() if _SD then return end _SD=true _A=false for i=#_THR,1,-1 do pcall(task.cancel,_THR[i]) _THR[i]=nil end for i=#_CON,1,-1 do pcall(function() _CON[i]:Disconnect() end) _CON[i]=nil end end
+local function _cl()
+    if _SD then return end
+    _SD=true
+    _A=false
+    _RDY=false
+    for i=#_THR,1,-1 do pcall(task.cancel,_THR[i]) end
+    for i=#_CON,1,-1 do pcall(function() _CON[i]:Disconnect() end) end
+    _THR={}
+    _CON={}
+end
 _G._SCRIPT_CLEANUP=_cl
-local _TP={"simplespy","httpspy","remotespy","hydroxide","dex","infiniteyield","infinite yield","serverspy","scriptdumper","saveinstance","iy_topbar","iy_main","iy_window","frosthook","hookspy","remote_logger","unitedHub","darkdex"}
-local _TM={"SimpleSpy","HttpSpy","RemoteSpy","Hydroxide","Dex","DexExplorer","InfiniteYield","IY_LOADED","SimpleSpyExecuted","RemoteSpyLoaded","InfiniteYieldLoaded","InfiniteYieldLoaded_gethui","getgenv().IY_LOADED"}
-local function _snap()
-    if _isW(_L.UserId) then return end
-    _IT.t=tick()
-    local e=getgenv and getgenv() or _G
-    for _,m in ipairs(_TM) do if rawget(e,m)~=nil then _IT.m[m]=true end end
-    local g=rawget(e,"_G")
-    if g and type(g)=="table" then
-        for _,k in ipairs({"SimpleSpy","RemoteSpy","HttpSpy","Dex","InfiniteYield","IY_LOADED"}) do
-            if rawget(g,k) then _IT.m["G_"..k]=true end
-        end
-    end
-    for _,loc in ipairs({_C,_PG}) do
-        if loc then
-            pcall(function()
-                for _,gui in pairs(loc:GetChildren()) do
-                    if gui:IsA("ScreenGui") or gui:IsA("Folder") then
-                        _IT.g[gui.Name:lower()]=true
-                    end
-                end
-            end)
-        end
-    end
-end
-local function _isNew(n,im)
-    if im then return not _IT.m[n]
-    else return not _IT.g[n:lower()] end
-end
-local function _det()
-    if _isW(_L.UserId) then return false end
-    if tick()-_IT.t<5 then return false end
+local _TP={"simplespy","httpspy","remotespy","hydroxide","infiniteyield","infinite_yield","iy_topbar","iy_main","serverspy","scriptdumper","saveinstance","frosthook","hookspy","unitedHub","darkdex","dex_explorer"}
+local _TM={"SimpleSpy","HttpSpy","RemoteSpy","Hydroxide","Dex","DexExplorer","InfiniteYield","IY_LOADED","SimpleSpyExecuted","RemoteSpyLoaded","InfiniteYieldLoaded"}
+local function _doSnap()
     local e=getgenv and getgenv() or _G
     for _,m in ipairs(_TM) do
         local v=rawget(e,m)
-        if v~=nil and _isNew(m,true) then
-            return true,"ENV",m
+        if v~=nil then
+            _IT.m[m]=true
         end
     end
-    local g=rawget(e,"_G")
-    if g and type(g)=="table" then
-        for _,k in ipairs({"SimpleSpy","RemoteSpy","HttpSpy","Dex","InfiniteYield","IY_LOADED","SimpleSpyExecuted"}) do
-            local key="G_"..k
-            if rawget(g,k) and _isNew(key,true) then
-                return true,"_G",k
+    local ok,g=pcall(function() return rawget(e,"_G") end)
+    if ok and g and type(g)=="table" then
+        for _,k in ipairs({"SimpleSpy","RemoteSpy","HttpSpy","Dex","InfiniteYield","IY_LOADED"}) do
+            if rawget(g,k) then
+                _IT.m["G_"..k]=true
             end
         end
     end
-    if getgenv then
-        local ge=getgenv()
-        if ge.SimpleSpy and _isNew("SimpleSpy",true) then return true,"GENV","SimpleSpy" end
-        if ge.InfiniteYield and _isNew("InfiniteYield",true) then return true,"GENV","InfiniteYield" end
-        if ge.IY_LOADED and _isNew("IY_LOADED",true) then return true,"GENV","IY_LOADED" end
-        if ge.Hydroxide and _isNew("Hydroxide",true) then return true,"GENV","Hydroxide" end
-        if ge.Dex and _isNew("Dex",true) then return true,"GENV","Dex" end
-        if ge.RemoteSpy and _isNew("RemoteSpy",true) then return true,"GENV","RemoteSpy" end
-    end
-    for _,loc in ipairs({_C,_PG}) do
-        if loc then
-            local found,cat,sig
-            pcall(function()
-                for _,gui in pairs(loc:GetChildren()) do
-                    if (gui:IsA("ScreenGui") or gui:IsA("Folder")) and gui.Name then
-                        local nm=gui.Name:lower()
-                        if _isNew(nm,false) then
-                            for _,p in ipairs(_TP) do
-                                if nm:find(p,1,true) then
-                                    found=true cat="GUI" sig=gui.Name
-                                    return
-                                end
-                            end
-                        end
-                    end
+    if _C then
+        pcall(function()
+            for _,gui in pairs(_C:GetChildren()) do
+                if gui:IsA("ScreenGui") or gui:IsA("Folder") or gui:IsA("Frame") then
+                    _IT.g[gui.Name:lower()]=true
                 end
-            end)
-            if found then return true,cat,sig end
-        end
+            end
+        end)
+    end
+    if _PG then
+        pcall(function()
+            for _,gui in pairs(_PG:GetChildren()) do
+                if gui:IsA("ScreenGui") or gui:IsA("Folder") or gui:IsA("Frame") then
+                    _IT.g[gui.Name:lower()]=true
+                end
+            end
+        end)
     end
     if gethui then
         pcall(function()
             for _,gui in pairs(gethui():GetChildren()) do
-                if gui:IsA("ScreenGui") and gui.Name then
+                _IT.g[gui.Name:lower()]=true
+            end
+        end)
+    end
+end
+local function _snap()
+    if _isW(_L.UserId) then _RDY=true return end
+    _doSnap()
+    task.wait(1)
+    _doSnap()
+    task.wait(1)
+    _doSnap()
+    _RDY=true
+end
+local function _chkNew(n,isMarker)
+    if isMarker then
+        return _IT.m[n]==nil
+    else
+        return _IT.g[n:lower()]==nil
+    end
+end
+local function _det()
+    if not _RDY then return false end
+    if not _A then return false end
+    if _isW(_L.UserId) then return false end
+    local e=getgenv and getgenv() or _G
+    for _,m in ipairs(_TM) do
+        local ok,v=pcall(function() return rawget(e,m) end)
+        if ok and v~=nil and _chkNew(m,true) then
+            return true,"ENV",m
+        end
+    end
+    local ok2,g=pcall(function() return rawget(e,"_G") end)
+    if ok2 and g and type(g)=="table" then
+        for _,k in ipairs({"SimpleSpy","RemoteSpy","HttpSpy","Dex","InfiniteYield","IY_LOADED","SimpleSpyExecuted"}) do
+            local key="G_"..k
+            local ok3,val=pcall(function() return rawget(g,k) end)
+            if ok3 and val and _chkNew(key,true) then
+                return true,"_G",k
+            end
+        end
+    end
+    if _C then
+        local found,sig
+        pcall(function()
+            for _,gui in pairs(_C:GetChildren()) do
+                if gui:IsA("ScreenGui") or gui:IsA("Folder") then
                     local nm=gui.Name:lower()
-                    for _,p in ipairs(_TP) do
-                        if nm:find(p,1,true) then
-                            return true,"HUI",gui.Name
+                    if _chkNew(nm,false) then
+                        for _,p in ipairs(_TP) do
+                            if nm:find(p,1,true) then
+                                found=true
+                                sig=gui.Name
+                                return
+                            end
                         end
                     end
                 end
             end
         end)
+        if found then return true,"GUI",sig end
+    end
+    if _PG then
+        local found,sig
+        pcall(function()
+            for _,gui in pairs(_PG:GetChildren()) do
+                if gui:IsA("ScreenGui") or gui:IsA("Folder") then
+                    local nm=gui.Name:lower()
+                    if _chkNew(nm,false) then
+                        for _,p in ipairs(_TP) do
+                            if nm:find(p,1,true) then
+                                found=true
+                                sig=gui.Name
+                                return
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+        if found then return true,"GUI",sig end
+    end
+    if gethui then
+        local found,sig
+        pcall(function()
+            for _,gui in pairs(gethui():GetChildren()) do
+                local nm=gui.Name:lower()
+                if _chkNew(nm,false) then
+                    for _,p in ipairs(_TP) do
+                        if nm:find(p,1,true) then
+                            found=true
+                            sig=gui.Name
+                            return
+                        end
+                    end
+                end
+            end
+        end)
+        if found then return true,"HUI",sig end
     end
     return false
 end
 local function _mon()
     if _isW(_L.UserId) then return end
-    local m=task.spawn(function()
-        task.wait(10)
-        while _A do
-            task.wait(15)
-            if not _A then break end
+    local th=task.spawn(function()
+        while not _RDY do task.wait(0.5) end
+        task.wait(5)
+        while _A and not _SD do
+            task.wait(20)
+            if not _A or _SD then break end
             local d,c,s=_det()
             if d then
-                _ban("Tool detected: "..(s or c),{c,s})
+                _ban("Tool: "..(s or c),{c,s})
                 break
             end
         end
     end)
-    table.insert(_THR,m)
+    table.insert(_THR,th)
 end
-local function _guiWatch()
+local function _watchGui()
     if _isW(_L.UserId) then return end
-    local function check(d)
-        if not _A or _SD then return end
-        if not (d:IsA("ScreenGui") or d:IsA("Folder")) then return end
-        if not d.Name then return end
-        task.delay(1,function()
-            if not _A or _SD then return end
-            local nm=d.Name:lower()
-            if _isNew(nm,false) then
+    local function chk(gui)
+        if not _A or _SD or not _RDY then return end
+        if not gui:IsA("ScreenGui") and not gui:IsA("Folder") then return end
+        task.delay(2,function()
+            if not _A or _SD or not _RDY then return end
+            local nm=gui.Name:lower()
+            if _chkNew(nm,false) then
                 for _,p in ipairs(_TP) do
                     if nm:find(p,1,true) then
-                        _ban("Tool GUI: "..d.Name,{"GUI",d.Name})
+                        _ban("Tool: "..gui.Name,{"GUI",gui.Name})
                         return
                     end
                 end
@@ -313,53 +383,55 @@ local function _guiWatch()
         end)
     end
     if _C then
-        local c1=_C.ChildAdded:Connect(check)
+        local c1=_C.ChildAdded:Connect(chk)
         table.insert(_CON,c1)
     end
     if _PG then
-        local c2=_PG.ChildAdded:Connect(check)
+        local c2=_PG.ChildAdded:Connect(chk)
         table.insert(_CON,c2)
     end
 end
-local function _ownerCheck()
-    if #_O==0 then return true end
+local function _ownerOk()
+    if not _O or #_O==0 then return true end
     for _,p in pairs(_P:GetPlayers()) do
-        if _isO(p.UserId) and p~=_L then
-            return false
-        end
+        if _isO(p.UserId) and p~=_L then return false end
     end
     return true
 end
 local function _ownerMon()
-    if #_O==0 then return end
-    local m=task.spawn(function()
-        while _A do
+    if not _O or #_O==0 then return end
+    local th=task.spawn(function()
+        while _A and not _SD do
             task.wait(30)
-            if not _A then break end
-            if not _ownerCheck() then
+            if not _A or _SD then break end
+            if not _ownerOk() then
                 _n("⚠️","Owner detected",3)
                 _cl()
                 return
             end
         end
     end)
-    table.insert(_THR,m)
-    local c=_P.PlayerAdded:Connect(function(p)
-        if not _A then return end
+    table.insert(_THR,th)
+    local cn=_P.PlayerAdded:Connect(function(p)
+        if not _A or _SD then return end
         task.wait(2)
         if _isO(p.UserId) then
             _n("⚠️","Owner joined",3)
             _cl()
         end
     end)
-    table.insert(_CON,c)
+    table.insert(_CON,cn)
 end
-if not _ownerCheck() then _n("⚠️","Owner in server",3) return end
-_snap()
-task.wait(2)
-_mon()
-_guiWatch()
-_ownerMon()
+if not _ownerOk() then
+    _n("⚠️","Owner in server",3)
+    return
+end
+task.spawn(function()
+    _snap()
+    _mon()
+    _watchGui()
+    _ownerMon()
+end)
 ${script}`;
 }
 
