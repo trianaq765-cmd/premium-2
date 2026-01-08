@@ -1,10 +1,27 @@
 const express=require('express'),axios=require('axios'),crypto=require('crypto'),cors=require('cors'),helmet=require('helmet'),rateLimit=require('express-rate-limit'),config=require('./config'),db=require('./lib/redis');
 const app=express(),SESSIONS=new Map();
-const ALLOWED_EXECUTORS=['delta','fluxus','krnl','oxygen','evon','hydrogen','vegax','trigon','comet','solara','wave','zorara','codex','celery','swift','sirhurt','electron','sentinel','coco','temple','valyse','nihon','jjsploit','wearedevs'];
+const const ALLOWED_EXECUTORS=['delta','fluxus','krnl','oxygen','evon','hydrogen','vegax','trigon','comet','solara','wave','zorara','codex','celery','swift','sirhurt','electron','sentinel','coco','temple','valyse','nihon','jjsploit','wearedevs'];
 const BLOCKED_EXECUTORS=['synapse','arceus','script-ware','scriptware'];
-const BOT_UA=['python','curl','wget','axios','node-fetch','aiohttp','httpx','requests/','postman','insomnia','discord.','telegram','scrapy','selenium','puppeteer','java/','okhttp','perl','php/','ruby','go-http','got/','undici','urllib','apache','libwww','bot','crawler','spider'];
+const BOT_UA=['python','curl','wget','axios','node-fetch','aiohttp','httpx','requests/','postman','insomnia','discord.','telegram','scrapy','selenium','puppeteer','java/','okhttp','perl','php/','ruby','go-http','got/','undici','urllib','apache','libwww','bot','crawler','spider','fiddler','charles','mitmproxy','burp','wireshark','httpwatch','iewatch','httpanalyzer','httpdebugger'];
 const TRAP_HTML=`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Access Denied</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:linear-gradient(135deg,#0a0a0a 0%,#1a1a2e 50%,#16213e 100%);min-height:100vh;display:flex;justify-content:center;align-items:center;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#fff;overflow:hidden}.container{text-align:center;padding:40px;max-width:500px}.shield{font-size:80px;margin-bottom:30px;animation:pulse 2s infinite}@keyframes pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.1);opacity:.8}}.title{font-size:28px;font-weight:700;margin-bottom:15px;background:linear-gradient(90deg,#ff416c,#ff4b2b);-webkit-background-clip:text;-webkit-text-fill-color:transparent}.subtitle{font-size:16px;color:#888;margin-bottom:30px;line-height:1.6}.code{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:15px 25px;font-family:monospace;color:#ff6b6b;font-size:14px}</style></head><body><div class="container"><div class="shield">🛡️</div><div class="title">Access Denied</div><div class="subtitle">This endpoint requires valid executor authentication.<br>Browser and bot access is not permitted.</div><div class="code">HTTP 403 | Forbidden</div></div></body></html>`;
 function sha256(s){return crypto.createHash('sha256').update(s).digest('hex')}
+function detectProxy(r){
+    const suspicious=[
+        r.headers['via'],
+        r.headers['x-forwarded-host'],
+        r.headers['x-originating-ip'],
+        r.headers['x-proxy-id'],
+        r.headers['proxy-connection']
+    ];
+    return suspicious.some(h=>!!h);
+}
+
+// Dalam setiap endpoint, tambahkan:
+if(detectProxy(r)){
+    await logAccess(r,'PROXY_DETECTED',false);
+    // Jangan langsung ban, bisa false positive
+    // Tapi bisa delay response atau return fake data
+}
 function hmac(d,k){return crypto.createHmac('sha256',k).update(d).digest('hex')}
 function secureCompare(a,b){if(typeof a!=='string'||typeof b!=='string'||a.length!==b.length)return false;try{return crypto.timingSafeEqual(Buffer.from(a),Buffer.from(b))}catch{return false}}
 function getIP(r){return(r.headers['x-forwarded-for']||'').split(',')[0].trim()||r.headers['x-real-ip']||r.ip||'0.0.0.0'}
