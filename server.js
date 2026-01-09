@@ -12,7 +12,7 @@ const SESSIONS = new Map();
 
 // --- CONFIGURATION ---
 const ALLOWED_EXECUTORS = ['delta', 'fluxus', 'krnl', 'oxygen', 'evon', 'hydrogen', 'vegax', 'trigon', 'comet', 'solara', 'wave', 'zorara', 'codex', 'celery', 'swift', 'sirhurt', 'electron', 'sentinel', 'coco', 'temple', 'valyse', 'nihon', 'jjsploit', 'wearedevs'];
-const BLOCKED_EXECUTORS = ['synapse', 'arceus', 'script-ware', 'scriptware']; // Synapse sudah mati, tapi tetap diblokir untuk legacy UA
+const BLOCKED_EXECUTORS = ['synapse', 'arceus', 'script-ware', 'scriptware']; 
 const BOT_UA = ['python', 'curl', 'wget', 'axios', 'node-fetch', 'aiohttp', 'httpx', 'requests/', 'postman', 'insomnia', 'discord.', 'telegram', 'scrapy', 'selenium', 'puppeteer', 'java/', 'okhttp', 'perl', 'php/', 'ruby', 'go-http', 'got/', 'undici', 'urllib', 'apache', 'libwww', 'bot', 'crawler', 'spider', 'fiddler', 'charles', 'mitmproxy', 'burp'];
 
 // --- HTML TEMPLATES ---
@@ -27,30 +27,72 @@ function getIP(r) { return (r.headers['x-forwarded-for'] || '').split(',')[0].tr
 function getHWID(r) { return r.headers['x-hwid'] || null; }
 function genSessionKey(u, h, t, s) { return hmac(`${u}:${h}:${t}`, s).substring(0, 32); }
 
+// --- UPDATED FAKE SCRIPT GENERATOR (MIMIC REAL LOADER) ---
 function genFakeScript() {
-    // Generate Fake Luraph-like Script (Honeypot)
-    const randStr = (len) => { let s = ''; const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'; for (let i = 0; i < len; i++)s += chars[Math.floor(Math.random() * chars.length)]; return s; };
-    const randHex = () => { let h = ''; for (let i = 0; i < Math.floor(Math.random() * 40) + 20; i++)h += '\\' + Math.floor(Math.random() * 255); return h; };
-    const vars = []; for (let i = 0; i < 50; i++)vars.push(randStr(Math.floor(Math.random() * 8) + 3));
-    const strings = []; for (let i = 0; i < 300; i++)strings.push('"' + randHex() + '"');
-    const tables = []; for (let i = 0; i < 150; i++)tables.push('[' + Math.floor(Math.random() * 99999) + ']="' + randStr(Math.floor(Math.random() * 15) + 5) + '"');
-    let fake = `--[[ Luraph Obfuscation v14.4.7 | Secure Script Protection ]]\n`;
-    fake += `local ${vars[0]},${vars[1]},${vars[2]},${vars[3]},${vars[4]};\n`;
-    fake += `local ${vars[5]}=(function()\n`;
-    fake += `local ${vars[6]}={${strings.slice(0, 100).join(',')}};\n`;
-    fake += `local ${vars[7]}={${tables.slice(0, 50).join(',')}};\n`;
-    fake += `local ${vars[8]}=0;local ${vars[9]}=1;\n`;
-    fake += `for ${vars[10]}=1,#${vars[6]} do\n`;
-    fake += `${vars[8]}=${vars[8]}+((string.byte(${vars[6]}[${vars[10]}]:sub(1,1))or 0)%256);\n`;
-    fake += `${vars[9]}=bit32.bxor(${vars[9]},${vars[8]});\n`;
-    fake += `end;return ${vars[8]}+${vars[9]} end)();\n`;
-    fake += `local ${vars[11]}=coroutine.wrap(function()\n`;
-    fake += `for ${vars[12]}=1,${Math.floor(Math.random() * 80000) + 20000} do\n`;
-    fake += `local ${vars[13]}=bit32.bxor(${vars[12]},${Math.floor(Math.random() * 99999)});\n`;
-    fake += `local ${vars[14]}=bit32.band(${vars[13]},0xFF);\n`;
-    fake += `coroutine.yield(${vars[14]})\nend end);\n`;
-    fake += `while true do end`; // Simple crash for bots
-    return fake;
+    const randName = () => '_' + Math.random().toString(36).substring(2, 8);
+    const randInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+
+    // Mimic the Variable Names from the Real Loader
+    const vKey = randName(), vBytes = randName(), vUrl = randName();
+    const vHttp = randName(), vPlayers = randName(), vGui = randName(), vLocal = randName();
+    const vInteg = randName(), vNotify = randName(), vHw = randName(), vReq = randName();
+    const vMain = randName();
+
+    // Fake XOR Key and Junk Bytes (Looks like encrypted data)
+    const fakeKey = randInt(10, 200);
+    const fakeBytes = Array.from({length: 45}, () => randInt(0, 255)).join(',');
+
+    return `
+--[[ Protected Loader ]]
+local ${vKey} = ${fakeKey}
+local ${vBytes} = {${fakeBytes}}
+local ${vUrl} = ""
+for _, b in ipairs(${vBytes}) do 
+    ${vUrl} = ${vUrl} .. string.char(bit32.bxor(b, ${vKey}) % 255) 
+end
+
+local ${vHttp} = game:GetService("HttpService")
+local ${vPlayers} = game:GetService("Players")
+local ${vGui} = game:GetService("StarterGui")
+local ${vLocal} = ${vPlayers}.LocalPlayer
+
+-- [SECURITY] Integrity Check (Anti-Spy/Hook)
+local function ${vInteg}()
+    local r = (syn and syn.request) or request or http_request or (http and http.request)
+    if not r then return end
+    if iscclosure and not iscclosure(r) then
+        while true do end -- Silent Crash
+    end
+    if iscclosure and not iscclosure(game.HttpGet) then
+        while true do end -- Silent Crash
+    end
+end
+pcall(${vInteg})
+
+local function ${vNotify}(t,x,d) pcall(function() ${vGui}:SetCore("SendNotification",{Title=t,Text=x,Duration=d or 3}) end) end
+local function ${vHw}() local s,r=pcall(function() if gethwid then return gethwid() end return "FB_"..tostring(${vLocal}.UserId) end) return s and r or "UNK" end
+
+local function ${vReq}(u,d) 
+    -- FAKE REQUEST FUNCTION
+    return nil 
+end
+
+local function ${vMain}() 
+    ${vNotify}("🔄","Connecting...",2) 
+    
+    -- FAKE LATENCY LOOP (Simulate network)
+    local s = os.clock()
+    while os.clock() - s < 1.5 do end
+    
+    ${vNotify}("🔄","Authenticating...",2)
+    local s2 = os.clock()
+    while os.clock() - s2 < 2.5 do end
+    
+    -- TRAP: INFINITE LOOP (Crash the Executor)
+    ${vNotify}("✅","Authenticated!",2)
+    while true do end 
+end
+pcall(${vMain})`;
 }
 
 function getClientType(r) {
@@ -122,16 +164,16 @@ task.spawn(function() _snap() _mon() _ownerMon() _heartbeat() end)
 ${script}`;
 }
 
-// --- 9/10 SECURITY: POLYMORPHIC LOADER GENERATOR ---
+// --- REAL LOADER GENERATOR (FUNCTIONAL) ---
 function getLoader(serverUrl) {
     const randName = () => '_' + Math.random().toString(36).substring(2, 8);
-    const key = Math.floor(Math.random() * 200) + 10; // Dynamic XOR Key
+    const key = Math.floor(Math.random() * 200) + 10;
     const urlEncrypted = [];
     for (let i = 0; i < serverUrl.length; i++) {
         urlEncrypted.push(serverUrl.charCodeAt(i) ^ key);
     }
 
-    // Variable names randomized to prevent signature detection
+    // Identical Structure to Fake Loader
     const vKey = randName(), vBytes = randName(), vUrl = randName();
     const vHttp = randName(), vPlayers = randName(), vGui = randName(), vLocal = randName();
     const vNotify = randName(), vHw = randName(), vReq = randName();
@@ -143,7 +185,7 @@ local ${vKey} = ${key}
 local ${vBytes} = {${urlEncrypted.join(',')}}
 local ${vUrl} = ""
 for _, b in ipairs(${vBytes}) do 
-    ${vUrl} = ${vUrl} .. string.char(bit32.bxor(b, ${vKey})) 
+    ${vUrl} = ${vUrl} .. string.char(bit32.bxor(b, ${vKey}) % 255) 
 end
 
 local ${vHttp} = game:GetService("HttpService")
@@ -155,7 +197,6 @@ local ${vLocal} = ${vPlayers}.LocalPlayer
 local function _integrity()
     local r = (syn and syn.request) or request or http_request or (http and http.request)
     if not r then return end
-    -- Check if request function is a C-Closure (Original)
     if iscclosure and not iscclosure(r) then
         while true do end -- Silent Crash
     end
@@ -198,7 +239,7 @@ local function ${vXor}(d,k) local r={} for i=1,#d do r[i]=string.char(bit32.bxor
 local function ${vSolve}(p) if p.type=="math" then local a,b,c,op=p.puzzle.a,p.puzzle.b,p.puzzle.c,p.puzzle.op if op=="+" then return(a+b)*c elseif op=="-" then return(a-b)*c elseif op=="*" then return(a*b)+c end elseif p.type=="bitwise" then local x,y,op=p.puzzle.x,p.puzzle.y,p.puzzle.op if op=="xor" then return bit32.bxor(x,y) elseif op=="and" then return bit32.band(x,y) elseif op=="or" then return bit32.bor(x,y) end elseif p.type=="sequence" then local s=p.puzzle.seq return s[4]+(s[2]-s[1]) elseif p.numbers then local sum=0 for _,x in ipairs(p.numbers) do sum=sum+x end return sum end return 0 end
 
 local function ${vMain}() 
-    ${vNotify}("🔄","...",2) 
+    ${vNotify}("🔄","Checking...",2) 
     local c=${vReq}(${vUrl}.."/api/auth/challenge",{userId=${vLocal}.UserId,hwid=${vHw}(),placeId=game.PlaceId}) 
     if not c or not c.success then ${vNotify}("❌","Err",5) return end 
     
@@ -227,6 +268,7 @@ app.use(async (req, res, next) => {
     if (ban.blocked) {
         const ct = getClientType(req);
         if (ct === 'browser') return res.status(403).type('html').send(TRAP_HTML);
+        // Send the Fake Script that looks like Real Loader
         return res.status(403).type('text/plain').send(genFakeScript());
     }
     next();
@@ -238,6 +280,7 @@ app.get('/admin', (r, res) => { res.type('html').send(ADMIN_HTML) });
 app.get('/', (r, res) => {
     const ct = getClientType(r);
     if (ct === 'browser') return res.status(403).type('html').send(TRAP_HTML);
+    // Mimic real loader for bots
     if (ct === 'bot' || ct === 'unknown') return res.status(403).type('text/plain').send(genFakeScript());
     if (ct === 'blocked_executor') return res.status(403).json({ error: 'Executor not allowed' });
     res.json({ status: 'ok', version: '7.1.0' });
@@ -249,6 +292,7 @@ app.get(['/loader', '/api/loader.lua', '/api/loader', '/l'], async (r, res) => {
     const ct = getClientType(r);
     await logAccess(r, 'LOADER_' + ct.toUpperCase(), ct === 'executor');
     if (ct === 'browser') return res.status(403).type('html').send(TRAP_HTML);
+    // Mimic real loader for bots
     if (ct === 'bot' || ct === 'unknown') return res.status(403).type('text/plain').send(genFakeScript());
     if (ct === 'blocked_executor') return res.status(403).type('text/plain').send(genFakeScript());
     const url = process.env.RENDER_EXTERNAL_URL || `${r.protocol}://${r.get('host')}`;
